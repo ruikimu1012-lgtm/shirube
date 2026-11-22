@@ -1,5 +1,5 @@
 // シルベ v5 — ボード／今日／記録／受け取り（＋羅針盤シート・AI相棒）
-import { createStore } from './store.js';
+import { createStore } from './store.js?v=202611222207';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -219,7 +219,7 @@ function render() {
   document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(x.textContent)) x.parentElement.open = true; });
   $('#fab').hidden = !['home', 'today'].includes(tab);
   const i = BOARDS.findIndex(b => b[0] === tab);
-  $('#dots').innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
+  const dots = $('#dots'); if (dots) dots.innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
   tickTimer();
 }
 
