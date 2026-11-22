@@ -1,6 +1,6 @@
 // データの置き場所。firebase-config.js が空なら「この端末だけ」（お試し）、入っていればクラウド（Firebase）
-import { firebaseConfig } from './firebase-config.js?v=202611222207';
-import { githubConfig } from './github-config.js?v=202611222207';
+import { firebaseConfig } from './firebase-config.js?v=202611222226';
+import { githubConfig } from './github-config.js?v=202611222226';
 
 const SDK = 'https://www.gstatic.com/firebasejs/11.0.2/';
 export const COLS = ['tasks', 'inbox', 'logs', 'ideas', 'meta', 'habits', 'goals', 'reviews'];
@@ -59,7 +59,8 @@ function githubStore(cfg) {
       for (const [id, v] of Object.entries(base.inbox || {})) if (!(own[id] && own[id]._del)) all[id] = { ...v, ...(own[id] || {}) };
       for (const [id, v] of Object.entries(own)) if (!all[id] && !v._del && v.text) all[id] = v;
     }
-    if (c === 'meta') for (const [k, v] of Object.entries(base.live || {})) { const i = k.indexOf('-'); if (k.slice(0, i) === 'meta') { const lid = k.slice(i + 1); all[lid] = { ...(own[lid] || {}), ...v }; } }
+    // live/meta-ai.json → meta の ai、live/status-projects.json → meta の status-projects（Macや木村OSが自動で上書きする状況）
+    if (c === 'meta') for (const [k, v] of Object.entries(base.live || {})) { const i = k.indexOf('-'); const lid = k.slice(0, i) === 'meta' ? k.slice(i + 1) : k; all[lid] = { ...(own[lid] || {}), ...v }; }
     return Object.entries(all).map(([id, v]) => ({ id, ...v }));
   };
   const emitAll = () => { const st = current(); for (const c of Object.keys(subs)) subs[c].forEach(cb => cb(rows(c, st))); };
@@ -142,6 +143,12 @@ function githubStore(cfg) {
     async batchSet(c, list) { list.forEach(({ id, ...v }) => ops.push({ op: 'set', c, id, data: v, merge: true })); persist(); emitAll(); await flush(); },
     dump() { const st = current(); const o = {}; COLS.forEach(c => { o[c] = Object.fromEntries(rows(c, st).map(({ id, ...v }) => [id, v])); }); return o; },
     refresh,
+    // ほかの自分のリポジトリ（AI家庭教師の ai-tutor-data など）を1ファイルだけ読む。無ければ null
+    async readOther(repo, path) {
+      if (!token) return null;
+      const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${repo}/contents/${path}?ref=main&t=${Date.now()}`, { cache: 'no-store', headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' } });
+      if (!r.ok) return null; const j = await r.json(); try { return JSON.parse(b64dec(j.content)); } catch { return null; }
+    },
     // AIに聞く：asks/<id>.json に置き、MacのClaude（sync/answer.py）が answers/<id>.json に答える。
     // onState('sent'|'working'|'late') で途中経過を知らせる。答えの本文を返す。Macが寝ていたら 'late' のあと待ち続ける
     async ask(req, onState, cancelled) {
