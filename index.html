@@ -40,12 +40,12 @@
   <main id="view"></main>
 </div>
 
-<nav class="dock" id="dock" aria-label="画面の切り替え">
-  <button data-tab="now" class="on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>いま</span></button>
+<div class="dots" id="dots" aria-hidden="true"></div>
+<nav class="dock" id="dock" aria-label="ボードの切り替え（左右にスワイプでも切り替わります）">
+  <button data-tab="home" class="on"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="10" rx="2"/><rect x="13" y="3" width="8" height="6" rx="2"/><rect x="13" y="11" width="8" height="10" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/></svg><span>ボード</span></button>
   <button data-tab="today"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg><span>今日</span></button>
+  <button data-tab="log"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/></svg><span>記録</span></button>
   <button data-tab="inbox"><svg viewBox="0 0 24 24"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 3h6l1-3h5"/></svg><span>受け取り</span><em id="inboxBadge" hidden>0</em></button>
-  <button data-tab="log"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>記録</span></button>
-  <button data-tab="compass"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg><span>羅針盤</span></button>
 </nav>
 <button class="fab" id="fab" aria-label="クエストを足す（N）"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
 

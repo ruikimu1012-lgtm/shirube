@@ -1,5 +1,5 @@
 // シルベ：電波がなくても画面を開けるようにする（データ側の同期はFirebaseが受け持つ）
-const V = 'shirube-v5-1';
+const V = 'shirube-v5-2';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'firebase-config.js', 'github-config.js', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

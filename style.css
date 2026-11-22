@@ -23,7 +23,7 @@ body[data-time="night"]{
 
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html{background:var(--sky3)}
-body{min-height:100dvh;color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.7;background:var(--sky3);
+body{min-height:100dvh;color:var(--ink);font-family:var(--font);font-size:16px;line-height:1.7;background:var(--sky3);
   -webkit-font-smoothing:antialiased;overflow-x:hidden;transition:color .8s var(--ease)}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:0;background:none}
@@ -158,7 +158,7 @@ details summary::-webkit-details-marker{display:none}
 
 /* ドック */
 .dock{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(12px + env(safe-area-inset-bottom));z-index:5;width:min(520px,calc(100% - 24px));
-  display:grid;grid-template-columns:repeat(5,1fr);padding:6px;border-radius:24px;background:var(--card);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  display:grid;grid-template-columns:repeat(4,1fr);padding:6px;border-radius:24px;background:var(--card);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
   box-shadow:0 18px 40px -16px rgba(0,0,0,.35),inset 0 0 0 1px var(--hair)}
 .dock button{position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 0 6px;border-radius:18px;color:var(--dim);font-size:10px;font-weight:500;transition:color .2s,background .2s}
 .dock button svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -383,3 +383,50 @@ input.full{width:100%;display:block}
 .toast span{min-width:0}
 body[data-time="night"] .mood-grid button{opacity:.5}
 .band[data-state=err]{box-shadow:inset 3px 0 0 var(--red)}
+
+/* ===== v5 ボード型（2026-11-22）：Apple HIG（タップ44pt・階層は大小と太さ・動きは短く）を土台に ===== */
+.dock button{min-height:52px;font-size:11px}
+.dots{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:5;display:flex;gap:2px}
+.dots button{width:22px;height:22px;display:grid;place-items:center}
+.dots button::after{content:"";width:7px;height:7px;border-radius:99px;background:var(--ink);opacity:.22;transition:opacity .2s,width .2s}
+.dots button.on::after{opacity:.75;width:18px}
+#view.in-r{animation:inR .22s ease-out}#view.in-l{animation:inL .22s ease-out}
+@keyframes inR{from{opacity:.4;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes inL{from{opacity:.4;transform:translateX(-24px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#view.in-r,#view.in-l{animation:none}}
+.values-hero .three span{font-size:22px;padding:18px 4px;letter-spacing:.04em}
+.values-hero .hero-word{margin-top:14px;font-size:15px;line-height:1.8}
+.values-hero .hero-src{font-size:11px;margin-top:2px}
+.goals-board .gb{padding:12px 0;border-top:1px solid var(--hair)}
+.goals-board .gb:first-of-type{border-top:0;padding-top:4px}
+.gb-head{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;text-align:left;font-size:17px}
+.gb-head b{flex:1;min-width:0}
+.gb .dot{width:10px;height:10px;border-radius:99px;background:currentColor;flex:none}
+.gb.c-red .dot{color:var(--red)}.gb.c-blue .dot{color:var(--blue)}.gb.c-green .dot{color:var(--green)}.gb.c-gold .dot{color:var(--gold)}
+.gb-next{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:15px}
+.gb-next .muted{flex:none;font-size:12px}
+.gb-q{flex:1;min-width:0;text-align:left;min-height:44px;font-weight:500}
+.t-play.sm{width:44px;height:44px}
+.gb-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.ai-btn{background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 18%,var(--card)),var(--card2));font-weight:700}
+.buddy .chips{margin-top:8px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+.buddy .chip{white-space:nowrap}
+.ai-wait{display:flex;align-items:center;gap:10px;padding:18px 4px;color:var(--dim)}
+.sug{display:flex;gap:12px;align-items:flex-start;width:100%;text-align:left;padding:12px;margin-top:8px;border-radius:14px;border:1.5px dashed var(--hair);background:color-mix(in srgb,var(--card2) 60%,transparent);min-height:44px;transition:opacity .15s}
+.sug i{flex:none;width:22px;height:22px;border-radius:99px;margin-top:2px;background:var(--accent);box-shadow:inset 0 0 0 2px var(--card)}
+.sug.c-red i{background:var(--red)}.sug.c-green i{background:var(--green)}.sug.c-blue i{background:var(--blue)}
+.sug span{display:flex;flex-direction:column}.sug small{color:var(--dim);font-size:12px}
+.sug.off{opacity:.35}.sug.off i{background:var(--hair)}.sug.off b{text-decoration:line-through}
+.steps-box{margin-top:18px;padding-top:12px;border-top:1px solid var(--hair)}
+.step{display:flex;gap:10px;align-items:center;width:100%;min-height:44px;text-align:left}
+.step i{flex:none;width:22px;height:22px;border-radius:7px;box-shadow:inset 0 0 0 2px var(--dim)}
+.step.done i{background:var(--green);box-shadow:none}.step.done span{color:var(--dim);text-decoration:line-through}
+.chat{max-height:52vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;margin:8px 0 12px}
+.msg{padding:10px 14px;border-radius:16px;max-width:92%;font-size:15px}
+.msg.user{align-self:flex-end;background:var(--card2)}
+.msg.assistant{align-self:flex-start;background:color-mix(in srgb,var(--accent) 10%,var(--card))}
+.sheet-cols{display:block}.sheet-cols .col{width:100%}
+.btn{min-height:44px}.btn.sm{min-height:36px}
+.values-hero .three{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+.values-hero .three span{border-radius:16px;background:var(--card2)}
+main#view{padding-bottom:calc(150px + env(safe-area-inset-bottom))}

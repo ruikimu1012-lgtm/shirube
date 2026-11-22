@@ -138,6 +138,26 @@ function githubStore(cfg) {
     async batchSet(c, list) { list.forEach(({ id, ...v }) => ops.push({ op: 'set', c, id, data: v, merge: true })); persist(); emitAll(); await flush(); },
     dump() { const st = current(); const o = {}; COLS.forEach(c => { o[c] = Object.fromEntries(rows(c, st).map(({ id, ...v }) => [id, v])); }); return o; },
     refresh,
+    // AIに聞く：asks/<id>.json に置き、MacのClaude（sync/answer.py）が answers/<id>.json に答える。
+    // onState('sent'|'working'|'late') で途中経過を知らせる。答えの本文を返す。Macが寝ていたら 'late' のあと待ち続ける
+    async ask(req, onState) {
+      if (!token) throw new Error('ログインしてください');
+      const id = newId();
+      const body = { ...req, id, createdAt: new Date().toISOString() };
+      const r = await api(`contents/asks/${id}.json`, { method: 'PUT', body: JSON.stringify({ message: 'ask', content: b64enc(JSON.stringify(body)), branch: 'main' }) });
+      if (!r.ok) fail(r);
+      onState?.('sent');
+      const t0 = Date.now(); let late = false;
+      while (Date.now() - t0 < 15 * 60e3) {
+        await new Promise(res => setTimeout(res, 4000));
+        let a = null; try { a = (await getFile(`answers/${id}.json`))?.data; } catch {}
+        if (a?.status === 'done') return a.text;
+        if (a?.status === 'error') throw new Error('AIが答えられませんでした');
+        if (a?.status === 'working') onState?.('working');
+        else if (!late && Date.now() - t0 > 75e3) { late = true; onState?.('late'); }
+      }
+      throw new Error('時間切れ（Macが眠っているかもしれません）');
+    },
   };
   return s;
 }

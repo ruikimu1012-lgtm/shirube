@@ -47,8 +47,11 @@ const SEED_GOALS = [
   ['価値観に基づく習慣', '習慣：価値観に基づく普遍的な習慣＋計画的偶発性の枠（思いつきを取り込む余白）', 'green'],
 ];
 
-let store, tab = 'now';
-try { tab = localStorage.getItem('shirube_tab') || 'now'; } catch {}
+let store, tab = 'home';
+try { tab = localStorage.getItem('shirube_tab') || 'home'; } catch {}
+// 4枚のボード（左右にスワイプ／下のバー／←→キー／1〜4キー）。前に見ていたボードを覚える
+const BOARDS = [['home', 'ボード'], ['today', '今日'], ['log', '記録'], ['inbox', '受け取り']];
+if (!BOARDS.some(b => b[0] === tab)) tab = 'home';
 const S = { tasks: [], inbox: [], logs: [], ideas: [], meta: [], habits: [], goals: [], reviews: [] };
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('shirube_prefs') || '{}'); } catch { return {}; } })();
 const savePrefs = () => { try { localStorage.setItem('shirube_prefs', JSON.stringify(prefs)); } catch {} };
@@ -204,12 +207,14 @@ function md(src = '') {
 }
 
 /* ================= 画面 ================= */
-const views = { now: viewNow, today: viewToday, inbox: viewInbox, log: viewLog, compass: viewCompass };
+const views = { home: viewHome, today: viewToday, inbox: viewInbox, log: viewLog };
 function render() {
   paintHud(); paintBand();
   document.querySelectorAll('.dock button').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'); });
   $('#view').innerHTML = views[tab]();
-  $('#fab').hidden = !['now', 'today'].includes(tab);
+  $('#fab').hidden = !['home', 'today'].includes(tab);
+  const i = BOARDS.findIndex(b => b[0] === tab);
+  $('#dots').innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
   tickTimer();
 }
 
@@ -228,7 +233,93 @@ const todayTasks = () => {
 };
 const activeHabits = () => S.habits.filter(h => !h.archived).sort((a, b) => Object.keys(SLOTS).indexOf(a.slot) - Object.keys(SLOTS).indexOf(b.slot) || (a.order || 0) - (b.order || 0));
 
-/* ---------- いま ---------- */
+
+/* ---------- ボード1：ひと目で分かる（価値観 → 目標 → いまやること） ---------- */
+// 価値観の3語は原文の行をそのまま使う（言い換えない）。読めない時は原文と同じ3語
+function valueWords() {
+  const v = bible?.values; if (!v) return ['おもろさ', '無敵', '自然'];
+  const lines = v.split('\n').map(l => l.trim()).filter(l => l && !/^[#>]/.test(l));
+  const out = []; for (const l of lines) { if (/^[🔑📌-]/.test(l) || l.length > 12) break; out.push(l); }
+  return out.length ? out : ['おもろさ', '無敵', '自然'];
+}
+function nowCard() {
+  const n = meta('now');
+  const open = todayTasks().filter(x => x.status === 'todo' && x.id !== n.taskId);
+  return `<section class="card now-card ${n.text ? 'active' : ''}">
+      <div class="eyebrow">いまやってること</div>
+      ${n.text ? `<h2 class="big">${esc(n.text)}</h2>
+        <div class="now-meta"><span class="pulse"></span>${ago(n.since)}</div>
+        ${timerBlock(n)}
+        <div class="row">
+          ${n.taskId ? `<button class="btn primary" data-act="now-done">終わった！</button>` : ''}
+          <button class="btn" data-act="now-edit">変える</button>
+          <button class="btn ghost" data-act="now-clear">ひと区切り</button>
+        </div>`
+      : `<form class="field" data-form="now"><input name="t" placeholder="いま、何をやる？" autocomplete="off" enterkeyhint="go"><button class="btn primary">始める</button></form>
+        ${open.length ? `<div class="pick-label">今日のクエストから選ぶ</div><div class="pick">${open.slice(0, 3).map(x => `<button data-act="now-from" data-id="${x.id}"><span class="dot c-${col(x.color)}"></span><span>${esc(x.title)}</span><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>`).join('')}</div>` : ''}`}
+    </section>`;
+}
+function goalBoard() {
+  const gs = S.goals.filter(g => !g.archived).sort((a, b) => (a.order || 0) - (b.order || 0) || (a.createdAt || 0) - (b.createdAt || 0));
+  if (!gs.length) return `<section class="card"><div class="eyebrow">目標</div><div class="empty">まだ目標がありません。目標を入れると、そのためのクエストがここに並びます</div>
+    <div class="row"><button class="btn primary" data-act="seed-goals">目標一覧から入れる</button><button class="btn" data-act="goal-new">自分で書く</button></div></section>`;
+  return `<section class="card goals-board">
+    <div class="eyebrow">目標と、次の一手 <button class="eyebrow-act" data-act="goal-new">＋ 目標</button></div>
+    ${gs.map(g => {
+      const ts = S.tasks.filter(t => t.goalId === g.id && t.status !== 'stored'), d = ts.filter(t => t.status === 'done').length;
+      const next = ts.filter(t => t.status === 'todo').sort((a, b) => (!!b.today - !!a.today) || (b.urgency || 0) - (a.urgency || 0))[0];
+      return `<div class="gb c-${col(g.color)}">
+        <button class="gb-head" data-act="goal-open" data-id="${g.id}"><span class="dot"></span><b>${esc(g.title)}</b><span class="goal-n">${ts.length ? `${d}/${ts.length}` : ''}</span></button>
+        ${ts.length ? `<div class="progress thin"><i style="transform:scaleX(${d / ts.length})"></i></div>` : ''}
+        ${next ? `<div class="gb-next"><span class="muted">次</span><button class="gb-q" data-act="task-edit" data-id="${next.id}">${esc(next.title)}</button><button class="t-play sm" data-act="now-from" data-id="${next.id}" aria-label="いまやる"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg></button></div>`
+          : `<div class="gb-next"><span class="muted">次の一手がまだありません</span></div>`}
+        <div class="gb-acts"><button class="btn sm ai-btn" data-act="ai-goal" data-id="${g.id}">✦ AIに分けてもらう</button><button class="btn sm ghost" data-act="goal-add-task" data-id="${g.id}">＋ 自分で足す</button></div>
+      </div>`;
+    }).join('')}
+  </section>`;
+}
+function viewHome() {
+  const st = moodState(), mode = meta('mode'), ai = meta('ai'), word = todaysWord();
+  const aiFresh = ai.text && now() - (ai.updatedAt || 0) < 3 * 3600e3;
+  const fresh = !prefs.onboarded && (!S.tasks.length || !S.habits.length || !S.goals.length);
+  const list = todayTasks(), todo = list.filter(t => t.status === 'todo'), doneN = list.length - todo.length;
+  const top = (st === 'low' ? todo.slice(0, 1) : todo.slice(0, 3));
+  return `
+  <div class="col">
+    <div class="greet"><span>${greet()}</span><small>${new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' })}</small>
+      <button class="state-pill s-${st}" data-act="compass-open">${STATES[st].name}${mode.mode && MODES[mode.mode] ? `・${MODES[mode.mode].name}モード` : ''}</button></div>
+    ${fresh ? onboarding() : ''}
+    ${needsReset() ? `<section class="card reset"><div class="eyebrow">リセット・プロトコル</div>
+      <p>ルーティンが崩れた時は、「翌朝の散歩と瞑想」を完了させた時点でOSが完全に再起動（リセット）されたとみなす。</p>
+      <p class="muted" style="margin-top:6px">何日空いても、記録は1つも減っていません。</p></section>` : ''}
+    <section class="card values-hero">
+      <div class="eyebrow">価値観 <button class="eyebrow-act" data-act="compass-open">羅針盤をひらく</button></div>
+      <div class="three">${valueWords().map(w => `<span>${esc(w)}</span>`).join('')}</div>
+      ${word ? `<p class="hero-word">${esc(word.text)}</p><p class="muted hero-src">${esc(word.head)}（聖典）</p>` : ''}
+    </section>
+    ${nowCard()}
+    <section class="card">
+      <div class="eyebrow">今日やること <small>${list.length ? `${doneN} / ${list.length} 達成` : ''}</small><button class="eyebrow-act" data-act="go" data-v="today">すべて →</button></div>
+      ${list.length ? `<div class="progress"><i style="transform:scaleX(${doneN / list.length})"></i></div>` : ''}
+      ${top.length ? top.map(t => taskRow(t)).join('') : list.length ? '<div class="clear-all">今日のクエスト、ぜんぶ達成。🎉</div>' : '<div class="empty">まだありません。下に書くか、目標の「AIに分けてもらう」から</div>'}
+      ${st === 'low' && todo.length > 1 ? `<div class="muted" style="margin-top:8px">今日は1つだけ見せています（鬱の日モード）</div>` : ''}
+      <form class="field quick" data-form="quick"><input name="t" placeholder="＋ 今日のクエストを足す" autocomplete="off" enterkeyhint="done"><button class="btn primary" aria-label="足す">足す</button></form>
+    </section>
+  </div>
+  <div class="col">
+    ${goalBoard()}
+    <section class="card buddy">
+      <div class="eyebrow">相棒に聞く <small>${store.ask ? 'MacのClaudeが答えます' : 'クラウドにつなぐと使えます'}</small></div>
+      <form class="field" data-form="askAI"><input name="t" placeholder="例：今日なにから手をつける？" autocomplete="off" enterkeyhint="send"><button class="btn primary">聞く</button></form>
+      <div class="chips no-swipe">${['今日なにから手をつける？', '今の自分に合う休み方は？', '目標に向けて、今週やるべき1つは？'].map(q => `<button type="button" class="chip" data-act="ask-quick" data-v="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    </section>
+    ${aiFresh ? `<section class="card ai-card"><div class="ai-dot">AI</div><div style="min-width:0">
+        <div class="eyebrow">ターミナルで進行中 <small>${esc(SRC[ai.tool] || ai.tool || '')}・${ago(ai.updatedAt, '前')}</small></div>
+        <div>${esc(ai.text)}</div>${ai.project ? `<div class="muted">${esc(ai.project)}</div>` : ''}</div></section>` : ''}
+  </div>`;
+}
+
+/* ---------- 旧「いま」（今日ボードの部品として使う） ---------- */
 function viewNow() {
   const n = meta('now'), ai = meta('ai'), mode = meta('mode'), st = moodState(), t = todayLog();
   const aiFresh = ai.text && now() - (ai.updatedAt || 0) < 3 * 3600e3;
@@ -241,7 +332,7 @@ function viewNow() {
   return `
   <div class="col">
     <div class="greet"><span>${greet()}</span><small>${new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' })}</small>
-      <button class="state-pill s-${st}" data-act="go" data-v="compass">${STATES[st].name}${mode.mode && MODES[mode.mode] ? `・${MODES[mode.mode].name}モード` : ''}</button></div>
+      <button class="state-pill s-${st}" data-act="compass-open">${STATES[st].name}${mode.mode && MODES[mode.mode] ? `・${MODES[mode.mode].name}モード` : ''}</button></div>
     ${fresh ? onboarding() : ''}
     ${needsReset() ? `<section class="card reset"><div class="eyebrow">リセット・プロトコル</div>
       <p>ルーティンが崩れた時は、「翌朝の散歩と瞑想」を完了させた時点でOSが完全に再起動（リセット）されたとみなす。</p>
@@ -331,6 +422,7 @@ function taskRow(t, opts = {}) {
   if (t.style && STYLES[t.style]) bits.push(STYLES[t.style][1]);
   if (goal) bits.push(goal.title);
   if (carried) bits.push('前の日から');
+  if (t.steps?.length) bits.push(`ステップ ${t.steps.filter(x => x.done).length}/${t.steps.length}`);
   if (t.source === 'claude' || t.source === 'codex') bits.push(SRC[t.source]);
   return `<div class="task c-${col(t.color)} ${t.status === 'done' ? 'done' : ''}" data-id="${t.id}">
     <button class="chk" data-act="${opts.later ? 'to-today' : 'toggle'}" data-id="${t.id}" aria-label="${opts.later ? '今日へ移す' : '完了にする'}">
@@ -346,8 +438,14 @@ function viewToday() {
   const shown = st === 'low' ? list.filter(t => t.status === 'done').concat(todo.slice(0, 1)) : list;
   const later = S.tasks.filter(t => t.status === 'todo' && !t.today).sort((a, b) => (b.urgency || 0) - (a.urgency || 0) || (b.createdAt || 0) - (a.createdAt || 0));
   const doneN = list.length - todo.length;
+  const t = todayLog(), tod = timeOfDay(), h = new Date().getHours();
+  const ritualMorning = (tod === 'morning' || tod === 'day') && t.energy == null, ritualNight = h >= 20 || h < 3;
   return `
   <div class="col">
+    ${ritualMorning ? `<section class="card ritual"><div class="eyebrow">朝の儀 <small>2タップで終わります</small></div>
+      <p class="muted">ゆうべの睡眠</p>${sleepChips(t)}
+      <p class="muted" style="margin-top:12px">いまの気分は？</p>
+      <div class="quick-mood">${[[2, 2, '絶好調'], [1, 1, 'いい感じ'], [0, 0, 'ふつう'], [-1, -1, 'いまいち'], [-2, -2, 'しんどい']].map(([e, p, w]) => `<button data-act="mood" data-e="${e}" data-p="${p}" style="--m:${moodColor(e, p)}"><i></i>${w}</button>`).join('')}</div></section>` : ''}
     <section class="card">
       <div class="eyebrow">今日のクエスト <small>${list.length ? `${doneN} / ${list.length} 達成` : ''}${todo.length > 3 ? '・3つで十分です' : ''}</small></div>
       ${list.length ? `<div class="progress"><i style="transform:scaleX(${list.length ? doneN / list.length : 0})"></i></div>` : ''}
@@ -363,6 +461,15 @@ function viewToday() {
       <div class="eyebrow">あとで <small>${later.length}件・急ぎの順</small></div>
       ${later.length ? later.slice(0, 40).map(t => taskRow(t, { later: true })).join('') : '<div class="empty">「いつかやる」をここに置いておけます</div>'}
     </section>
+    <section class="card">
+      <div class="eyebrow">思いついたら投げ込む</div>
+      <form data-form="memo"><div class="memo-wrap"><textarea class="full" name="t" rows="3" placeholder="タスクでも、思いつきでも、気持ちでも。あとで受け取り箱で仕分けます"></textarea>
+      ${speechOK ? `<button type="button" class="mic" data-act="mic" aria-label="声で入力"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>` : ''}</div>
+      <div class="row end"><button class="btn primary">受け取り箱へ</button></div></form>
+    </section>
+    ${ritualNight ? `<section class="card ritual"><div class="eyebrow">夜のしめくくり</div>
+      <form data-form="night"><input class="full" name="t" value="${esc(t.night || '')}" placeholder="今日いちばん良かったこと、ひとことだけ" autocomplete="off" enterkeyhint="done">
+      <div class="row end"><button class="btn primary">しめくくる</button></div></form></section>` : ''}
     ${summaryCard()}
   </div>`;
 }
@@ -585,7 +692,10 @@ function taskForm(t = {}) {
       <div class="sub-label">勝利報酬 <small>倒したら何をする？</small></div><input class="full" name="reward" value="${esc(t.reward || '')}" placeholder="例：サウナという名の回復ポーション" autocomplete="off">
     </details>
     <div class="row end">${t.id ? `<button type="button" class="btn ghost" data-act="task-store" data-id="${t.id}">しまう</button>` : ''}<button class="btn primary">${t.id ? '保存' : '足す'}</button></div>
-  </form>`;
+  </form>
+  ${t.id ? `<div class="steps-box"><div class="sub-label">ステップ <small>小さく分けると始めやすい</small></div>
+    ${(t.steps || []).map((x, i) => `<button class="step ${x.done ? 'done' : ''}" data-act="step-toggle" data-id="${t.id}" data-i="${i}"><i></i><span>${esc(x.t)}</span></button>`).join('') || '<div class="empty">まだありません</div>'}
+    <div class="row"><button class="btn sm ai-btn" data-act="ai-quest" data-id="${t.id}">✦ AIでステップに分ける</button>${t.steps?.length ? `<button class="btn sm ghost" data-act="steps-clear" data-id="${t.id}">ステップを消す</button>` : ''}</div></div>` : ''}`;
 }
 
 /* ================= 操作 ================= */
@@ -598,6 +708,34 @@ const undoDone = id => store.set('tasks', id, { status: 'todo', doneAt: null, do
 
 const actions = {
   go(_, el) { setTab(el.dataset.v); },
+
+  'compass-open'() { openSheet(`<h3>羅針盤</h3><div class="sheet-cols">${viewCompass()}</div>`); },
+  'ask-quick'(_, el) { askBuddy(el.dataset.v); },
+  'ai-goal'(id) { const g = S.goals.find(x => x.id === id); if (g) aiSuggest({ kind: 'goal', g }); },
+  'ai-quest'(id) { const t = S.tasks.find(x => x.id === id); if (t) aiSuggest({ kind: 'quest', t }); },
+  'ai-retry'() { if (aiCtx) aiSuggest(aiCtx, $('#aiHint')?.value || ''); },
+  'sug-toggle'(_, el) { el.classList.toggle('off'); buzz(5); },
+  'sug-adopt'() {
+    const picked = [...document.querySelectorAll('#sheet .sug:not(.off)')].map(b => aiSug[+b.dataset.i]).filter(Boolean);
+    if (!picked.length) return toast('採用するものを残してください');
+    if (aiCtx.kind === 'goal') {
+      picked.forEach(q => addTask({ title: q.title, color: ['red', 'blue', 'green'].includes(q.color) ? q.color : 'blue', size: [1, 2, 3].includes(+q.size) ? +q.size : 1, goalId: aiCtx.g.id, today: null, source: 'ai', note: q.why || '' }));
+      closeSheet(); toast(`${picked.length}件を「あとで」に足しました（今日やるものは＋で移せます）`); buzz(15);
+    } else {
+      const t = S.tasks.find(x => x.id === aiCtx.t.id); const prev = t.steps || [];
+      write(store.set('tasks', t.id, { steps: [...prev, ...picked.map(q => ({ t: q.title, done: false }))] }));
+      closeSheet(); toast(`${picked.length}個のステップを足しました`, '取り消す', () => store.set('tasks', t.id, { steps: prev })); buzz(15);
+      setTimeout(() => actions['task-edit'](t.id), 250);
+    }
+  },
+  'step-toggle'(id, el) {
+    const t = S.tasks.find(x => x.id === id); if (!t) return; const i = +el.dataset.i;
+    const steps = (t.steps || []).map((x, j) => j === i ? { ...x, done: !x.done } : x);
+    write(store.set('tasks', id, { steps })); el.classList.toggle('done'); buzz(8);
+    const m = el.closest('.steps-box')?.querySelector('.sub-label small'); if (m) m.textContent = `${steps.filter(x => x.done).length} / ${steps.length}`;
+  },
+  'steps-clear'(id) { const t = S.tasks.find(x => x.id === id); if (!t) return; const prev = t.steps; write(store.set('tasks', id, { steps: [] })); closeSheet(); toast('ステップを消しました', '取り消す', () => store.set('tasks', id, { steps: prev })); },
+
   toggle(id, el) {
     const t = S.tasks.find(x => x.id === id); if (!t) return;
     if (t.status === 'done') { write(undoDone(id)); return; }
@@ -639,7 +777,7 @@ const actions = {
   mood(_, el) {
     setLog({ energy: +el.dataset.e, pleasant: +el.dataset.p });
     const r = el.getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2, 8); buzz(10);
-    if (tab === 'now') toast('気分を残しました（+5XP）');
+    if (tab === 'home' || tab === 'today') toast('気分を残しました（+5XP）');
   },
   sleep(_, el) { setLog({ sleep: +el.dataset.h }); buzz(8); },
   habit(id, el) {
@@ -684,6 +822,7 @@ const actions = {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `シルベ_${dkey()}.json`; a.click();
   },
   signout() { store.signOut(); closeSheet(); },
+  'chat-new'() { chat = []; closeSheet(); toast('新しく話せます'); },
 };
 
 function habitSheet() {
@@ -715,6 +854,7 @@ function ideaSheet(i) {
 
 const pick = (f, g) => f.querySelector(`[data-group=${g}] .on`)?.dataset.v;
 const forms = {
+  askAI(f) { const q = f.t.value.trim(); f.t.value = ''; askBuddy(q); },
   now(f) { const t = f.t.value.trim(); if (!t) return; write(store.set('meta', 'now', { text: t, taskId: null, since: now(), timerEnd: null })); closeSheet(); buzz(10); },
   quick(f) { const t = f.t.value.trim(); if (!t) return; addTask({ title: t }); f.t.value = ''; toast('今日のクエストに足しました'); buzz(10); },
   memo(f) {
@@ -789,11 +929,34 @@ document.addEventListener('submit', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeSheet();
   if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey) return;
-  const map = { 1: 'now', 2: 'today', 3: 'inbox', 4: 'log', 5: 'compass' };
+  const map = { 1: 'home', 2: 'today', 3: 'log', 4: 'inbox' };
   if (map[e.key]) setTab(map[e.key]);
+  if (e.key === 'ArrowRight' && !sheetOpen) stepBoard(1);
+  if (e.key === 'ArrowLeft' && !sheetOpen) stepBoard(-1);
   if (e.key === 'n') { e.preventDefault(); actions['add-open'](); }
 });
-function setTab(t) { tab = t; try { localStorage.setItem('shirube_tab', t); } catch {} render(); scrollTo({ top: 0, behavior: 'smooth' }); }
+const boardScroll = {};
+function setTab(t, dir) {
+  if (t === 'now') t = 'home';
+  if (t === 'compass') { actions['compass-open'](); return; }
+  if (t === tab) { scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  boardScroll[tab] = scrollY;
+  const from = BOARDS.findIndex(b => b[0] === tab), to = BOARDS.findIndex(b => b[0] === t);
+  tab = t; try { localStorage.setItem('shirube_tab', t); } catch {}
+  render(); scrollTo({ top: boardScroll[t] || 0 });
+  const v = $('#view'); v.classList.remove('in-l', 'in-r'); void v.offsetWidth; v.classList.add((dir || (to - from)) > 0 ? 'in-r' : 'in-l');
+}
+function stepBoard(d) { const i = BOARDS.findIndex(b => b[0] === tab); const j = i + d; if (j >= 0 && j < BOARDS.length) { setTab(BOARDS[j][0], d); buzz(5); } }
+// 左右のスワイプでボードを切り替える（縦のスクロールや横に流れる部品とは取り合わない）
+let sw = null;
+$('#view').addEventListener('touchstart', e => {
+  if (sheetOpen || e.touches.length > 1 || e.target.closest('input,textarea,.chips,.pixels,.mood-grid,.timer,.no-swipe')) { sw = null; return; }
+  sw = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+}, { passive: true });
+$('#view').addEventListener('touchend', e => {
+  if (!sw) return; const dx = e.changedTouches[0].clientX - sw.x, dy = e.changedTouches[0].clientY - sw.y; const quick = Date.now() - sw.t < 600; sw = null;
+  if (quick && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.8) stepBoard(dx < 0 ? 1 : -1);
+}, { passive: true });
 
 /* ================= タイマー ================= */
 let timerLoop;
@@ -847,6 +1010,59 @@ function listen(ta) {
   rec.onresult = e => { ta.value = base + [...e.results].map(r => r[0].transcript).join(''); };
   rec.onend = rec.onerror = () => { btn?.classList.remove('rec'); rec = null; };
   rec.start();
+}
+
+
+/* ================= AI相棒（MacのClaudeが答える。store.ask） ================= */
+let aiCtx = null, aiSug = [], chat = [];
+const aiWait = st => ({ sent: 'Macの相棒に渡しました…', working: '相棒が考えています（30秒ほど）…', late: 'Macが眠っているようです。Macが起きたら答えます（このまま待てます）' }[st] || '');
+function aiContext() {
+  const gs = S.goals.filter(g => !g.archived).map(g => `- ${g.title}${g.why ? `（なぜ：${g.why}）` : ''}`).join('\n') || '（なし）';
+  const td = todayTasks().filter(t => t.status === 'todo').map(t => `- ${t.title}`).join('\n') || '（なし）';
+  const st = STATES[moodState()].name;
+  return `【持ち主の価値観（原文の言葉）】${valueWords().join('・')}\n【目標】\n${gs}\n【今日のクエスト】\n${td}\n【今の状態】${st}${moodState() === 'low' ? '（今日は量を減らす日。1つだけでよい）' : ''}`;
+}
+function parseJson(text) { const m = text.match(/\{[\s\S]*\}/); if (!m) throw new Error('形が違いました'); return JSON.parse(m[0]); }
+async function aiSuggest(ctx, hint = '') {
+  if (!store.ask) return toast('AIはクラウドにつないだ時に使えます');
+  aiCtx = ctx; aiSug = [];
+  const title = ctx.kind === 'goal' ? `「${ctx.g.title}」をクエストに分ける` : `「${ctx.t.title}」をステップに分ける`;
+  openSheet(`<h3>✦ ${esc(title)}</h3><div class="ai-wait" id="aiWait"><span class="pulse"></span>${aiWait('sent')}</div>`);
+  const have = ctx.kind === 'goal' ? S.tasks.filter(t => t.goalId === ctx.g.id && t.status !== 'stored').map(t => `- ${t.title}${t.status === 'done' ? '（済）' : ''}`).join('\n') || '（なし）' : (ctx.t.steps || []).map(x => `- ${x.t}`).join('\n') || '（なし）';
+  const prompt = ctx.kind === 'goal'
+    ? `${aiContext()}\n\n目標「${ctx.g.title}」${ctx.g.why ? `（なぜ：${ctx.g.why}）` : ''}を達成するためのクエストを3〜5個出してください。\n今あるクエスト：\n${have}\n条件：今あるものと重ねない。1つは15分以内で始められる小さいもの。赤＝感情が動く挑戦、青＝社会・仕事、緑＝回復・整える。size は 1=小 2=中 3=大。${hint ? `\n追加の希望：${hint}` : ''}\n形式：{"quests":[{"title":"","color":"red|blue|green","size":1,"why":"なぜ効くか20字以内"}]}`
+    : `${aiContext()}\n\nクエスト「${ctx.t.title}」を、上から順にやれば終わるステップ3〜6個に分けてください。最初のステップは2分で始められるものに。\n今あるステップ：\n${have}${hint ? `\n追加の希望：${hint}` : ''}\n形式：{"quests":[{"title":"","why":""}]}`;
+  try {
+    const text = await store.ask({ kind: 'json', prompt }, st => { const w = $('#aiWait'); if (w) w.innerHTML = `<span class="pulse"></span>${aiWait(st)}`; });
+    aiSug = (parseJson(text).quests || []).filter(q => q && q.title).slice(0, 8);
+    if (!sheetOpen || aiCtx !== ctx) return;
+    $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button><h3>✦ ${esc(title)}</h3>
+      <p class="muted">要らないものはタップで外せます。残したものだけが足されます</p>
+      ${aiSug.map((q, i) => `<button class="sug c-${col(q.color || 'blue')}" data-act="sug-toggle" data-i="${i}"><i></i><span><b>${esc(q.title)}</b>${q.why ? `<small>${esc(q.why)}</small>` : ''}</span></button>`).join('')}
+      <div class="row end"><button class="btn primary" data-act="sug-adopt">残したものを足す</button></div>
+      <div class="sub-label" style="margin-top:16px">出し直す</div>
+      <div class="field"><input id="aiHint" placeholder="例：もっと小さく／週末にできるもの" autocomplete="off"><button class="btn" data-act="ai-retry">出し直す</button></div>`;
+  } catch (e) {
+    if (sheetOpen && aiCtx === ctx) $('#sheet').querySelector('#aiWait')?.replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: `うまくいきませんでした：${e.message}。もう一度押してください` }));
+  }
+}
+async function askBuddy(q) {
+  if (!q) return;
+  if (!store.ask) return toast('相棒はクラウドにつないだ時に使えます');
+  chat.push({ role: 'user', content: q }); chat = chat.slice(-8);
+  const paint = wait => {
+    const body = chat.map(m => `<div class="msg ${m.role}">${m.role === 'user' ? esc(m.content) : md(m.content)}</div>`).join('') + (wait ? `<div class="ai-wait" id="aiWait"><span class="pulse"></span>${wait}</div>` : '');
+    const html = `<h3>相棒に聞く</h3><div class="chat">${body}</div><form class="field" data-form="askAI"><input name="t" placeholder="続けて聞く" autocomplete="off" enterkeyhint="send"><button class="btn primary">聞く</button></form>
+      ${chat.length > 1 ? '<div class="row end"><button class="btn sm ghost" data-act="chat-new">新しく話す</button></div>' : ''}`;
+    if (sheetOpen && $('#sheet .chat')) { $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button>${html}`; } else openSheet(html);
+    const c = $('#sheet .chat'); if (c) c.scrollTop = c.scrollHeight;
+  };
+  paint(aiWait('sent'));
+  const msgs = [{ role: 'user', content: aiContext() + '\n\n（ここまでが私の今の状況です）' }, ...chat];
+  try {
+    const text = await store.ask({ kind: 'chat', messages: msgs }, st => { const w = $('#aiWait'); if (w) w.innerHTML = `<span class="pulse"></span>${aiWait(st)}`; });
+    chat.push({ role: 'assistant', content: text }); if ($('#sheet .chat')) paint(''); else toast('相棒が答えました。もう一度開くと読めます');
+  } catch (e) { chat.push({ role: 'assistant', content: `（うまくいきませんでした：${e.message}）` }); if ($('#sheet .chat')) paint(''); }
 }
 
 /* ================= シート・トースト ================= */
@@ -944,7 +1160,8 @@ forms.login = f => {
 const online = () => { $('#net').hidden = navigator.onLine; };
 addEventListener('online', online); addEventListener('offline', online);
 paintSky(); online();
-setInterval(() => { paintSky(); if (tab === 'now' && !sheetOpen) safeRender(); }, 60e3);
+let lastDay = dkey();
+setInterval(() => { paintSky(); if (dkey() !== lastDay) { lastDay = dkey(); safeRender(); } else if (tab === 'home' && !sheetOpen) safeRender(); }, 60e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { paintSky(); safeRender(); } });
 
 let raf, pending = false;
