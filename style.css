@@ -430,3 +430,11 @@ body[data-time="night"] .mood-grid button{opacity:.5}
 .values-hero .three{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
 .values-hero .three span{border-radius:16px;background:var(--card2)}
 main#view{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
+
+/* v5.1 品質レビューの指摘（タップ44pt・入力16px） */
+.eyebrow-act{min-height:44px;padding:0 6px;display:inline-flex;align-items:center}
+.state-pill{min-height:44px}
+.btn.sm{min-height:44px}
+.chip{min-height:44px}
+.field input,.field.quick input,input,textarea{font-size:16px}
+.dock button span{font-size:12px}

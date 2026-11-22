@@ -63,7 +63,7 @@ function githubStore(cfg) {
     return Object.entries(all).map(([id, v]) => ({ id, ...v }));
   };
   const emitAll = () => { const st = current(); for (const c of Object.keys(subs)) subs[c].forEach(cb => cb(rows(c, st))); };
-  const persist = () => { LS.set(KQ, ops); LS.set(KC, base); };
+  const persist = () => { try { localStorage.setItem(KQ, JSON.stringify(ops)); } catch { Object.values(errs).forEach(fn => fn?.({ code: 'quota', message: 'この端末の保存場所がいっぱいです' })); } LS.set(KC, base); };
   const schedule = ms => { clearTimeout(timer); timer = setTimeout(flush, ms || 700); };
 
   async function getFile(p) {
@@ -81,6 +81,7 @@ function githubStore(cfg) {
       if (c && c.sha === f.sha) { out[id] = c.data; return; }
       try { const x = await getFile(ck); if (x) { fileCache[ck] = { sha: f.sha, data: x.data }; out[id] = x.data; } } catch {}
     }));
+    for (const k of Object.keys(fileCache)) if (k.startsWith(dir + '/') && !files.some(f => dir + '/' + f.name === k)) delete fileCache[k];
     LS.set('shirube.gh.files', fileCache);
     return out;
   }
@@ -96,7 +97,7 @@ function githubStore(cfg) {
         const sent = ops.slice(); const f = await getFile('db/state.json'); const st = f ? f.data : { v: 1, cols: {} };
         sent.forEach(o => applyOp(st, o));
         const r = await putState(st, f && f.sha);
-        if (r.conflict) continue;
+        if (r.conflict) { await new Promise(res => setTimeout(res, [300, 1000, 3000, 0][i])); continue; }
         base.state = st; lastPut = Date.now(); ops = ops.slice(sent.length); persist(); emitAll(); busy = false; if (ops.length) schedule(); return;
       }
     } catch (e) { if (e.status === 401) relogin(); }
@@ -107,8 +108,10 @@ function githubStore(cfg) {
     try {
       const [f, inbox, live] = await Promise.all([getFile('db/state.json'), getDir('inbox'), getDir('live')]);
       const fresh = !busy && Date.now() - lastPut > 15000;
+      const before = JSON.stringify(base);
       base = { state: f && fresh ? f.data : (base.state || { v: 1, cols: {} }), inbox, live };
-      persist(); emitAll(); flush(); return true;
+      if (JSON.stringify(base) !== before) { persist(); emitAll(); }
+      flush(); return true;
     } catch (e) { if (e.status === 401) relogin(); else Object.values(errs).forEach(fn => fn?.(e)); return false; }
   }
   function relogin() { token = null; LS.del(KT); clearInterval(poll); s.user = null; authCb?.(null); }
@@ -130,7 +133,8 @@ function githubStore(cfg) {
       if (!/^(gh[opsu]_|github_pat_)/.test(tok)) { const e = new Error('bad pass'); e.code = 'auth/wrong-password'; throw e; }
       token = tok; LS.set(KT, tok); begin();
     },
-    async signOut() { LS.del(KC); LS.del(KQ); relogin(); },
+    pending() { return ops.length; },
+    async signOut() { await flush(); if (ops.length) return relogin(); LS.del(KC); LS.del(KQ); relogin(); },
     watch(c, cb, onErr) { (subs[c] ||= []).push(cb); errs[c] = onErr; cb(rows(c, current())); },
     async add(c, data) { const id = newId(); ops.push({ op: 'set', c, id, data }); persist(); emitAll(); schedule(); return id; },
     async set(c, id, data, merge = true) { ops.push({ op: 'set', c, id, data, merge }); persist(); emitAll(); schedule(); },
@@ -140,7 +144,7 @@ function githubStore(cfg) {
     refresh,
     // AIに聞く：asks/<id>.json に置き、MacのClaude（sync/answer.py）が answers/<id>.json に答える。
     // onState('sent'|'working'|'late') で途中経過を知らせる。答えの本文を返す。Macが寝ていたら 'late' のあと待ち続ける
-    async ask(req, onState) {
+    async ask(req, onState, cancelled) {
       if (!token) throw new Error('ログインしてください');
       const id = newId();
       const body = { ...req, id, createdAt: new Date().toISOString() };
@@ -150,7 +154,8 @@ function githubStore(cfg) {
       const t0 = Date.now(); let late = false;
       while (Date.now() - t0 < 15 * 60e3) {
         await new Promise(res => setTimeout(res, 4000));
-        let a = null; try { a = (await getFile(`answers/${id}.json`))?.data; } catch {}
+        if (cancelled?.()) throw new Error('cancel');
+        let a = null; try { a = (await getFile(`answers/${id}.json`))?.data; } catch (e) { if (e.status === 401) { relogin(); throw e; } }
         if (a?.status === 'done') return a.text;
         if (a?.status === 'error') throw new Error('AIが答えられませんでした');
         if (a?.status === 'working') onState?.('working');

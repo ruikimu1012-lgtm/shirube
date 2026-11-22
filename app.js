@@ -1,4 +1,4 @@
-// シルベ v0.4 — いま／今日／受け取り箱／記録／羅針盤
+// シルベ v5 — ボード／今日／記録／受け取り（＋羅針盤シート・AI相棒）
 import { createStore } from './store.js';
 
 /* ================= 基本 ================= */
@@ -211,7 +211,12 @@ const views = { home: viewHome, today: viewToday, inbox: viewInbox, log: viewLog
 function render() {
   paintHud(); paintBand();
   document.querySelectorAll('.dock button').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'); });
+  const drafts = {};
+  document.querySelectorAll('#view [data-form] input[name], #view [data-form] textarea[name]').forEach(e => { if (e.type !== 'checkbox' && e.value && e.dataset.typed) drafts[e.closest('[data-form]').dataset.form + '|' + e.name] = e.value; });
+  const openD = [...document.querySelectorAll('#view details[open] summary')].map(x => x.textContent);
   $('#view').innerHTML = views[tab]();
+  for (const [k, v] of Object.entries(drafts)) { const [f, n] = k.split('|'); const e = $(`#view [data-form="${f}"] [name="${n}"]`); if (e) { e.value = v; e.dataset.typed = '1'; } }
+  document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(x.textContent)) x.parentElement.open = true; });
   $('#fab').hidden = !['home', 'today'].includes(tab);
   const i = BOARDS.findIndex(b => b[0] === tab);
   $('#dots').innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
@@ -239,7 +244,7 @@ const activeHabits = () => S.habits.filter(h => !h.archived).sort((a, b) => Obje
 function valueWords() {
   const v = bible?.values; if (!v) return ['おもろさ', '無敵', '自然'];
   const lines = v.split('\n').map(l => l.trim()).filter(l => l && !/^[#>]/.test(l));
-  const out = []; for (const l of lines) { if (/^[🔑📌-]/.test(l) || l.length > 12) break; out.push(l); }
+  const out = []; for (const raw of lines) { if (/^\p{Extended_Pictographic}/u.test(raw)) break; const l = raw.replace(/^[-・]\s*/, ''); if (!l || l.length > 12) break; out.push(l); }
   return out.length ? out : ['おもろさ', '無敵', '自然'];
 }
 function nowCard() {
@@ -256,24 +261,25 @@ function nowCard() {
           <button class="btn ghost" data-act="now-clear">ひと区切り</button>
         </div>`
       : `<form class="field" data-form="now"><input name="t" placeholder="いま、何をやる？" autocomplete="off" enterkeyhint="go"><button class="btn primary">始める</button></form>
-        ${open.length ? `<div class="pick-label">今日のクエストから選ぶ</div><div class="pick">${open.slice(0, 3).map(x => `<button data-act="now-from" data-id="${x.id}"><span class="dot c-${col(x.color)}"></span><span>${esc(x.title)}</span><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>`).join('')}</div>` : ''}`}
+        ${open.length ? `<div class="pick-label">今日のクエストから選ぶ</div><div class="pick">${open.slice(0, moodState() === 'low' ? 1 : 3).map(x => `<button data-act="now-from" data-id="${x.id}"><span class="dot c-${col(x.color)}"></span><span>${esc(x.title)}</span><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>`).join('')}</div>` : ''}`}
     </section>`;
 }
 function goalBoard() {
   const gs = S.goals.filter(g => !g.archived).sort((a, b) => (a.order || 0) - (b.order || 0) || (a.createdAt || 0) - (b.createdAt || 0));
   if (!gs.length) return `<section class="card"><div class="eyebrow">目標</div><div class="empty">まだ目標がありません。目標を入れると、そのためのクエストがここに並びます</div>
     <div class="row"><button class="btn primary" data-act="seed-goals">目標一覧から入れる</button><button class="btn" data-act="goal-new">自分で書く</button></div></section>`;
+  const low = moodState() === 'low'; let shownNext = false;
   return `<section class="card goals-board">
-    <div class="eyebrow">目標と、次の一手 <button class="eyebrow-act" data-act="goal-new">＋ 目標</button></div>
+    <div class="eyebrow">目標と、次の一手 ${low ? '<small>今日は1つだけ</small>' : ''}<button class="eyebrow-act" data-act="goal-new">＋ 目標</button></div>
     ${gs.map(g => {
       const ts = S.tasks.filter(t => t.goalId === g.id && t.status !== 'stored'), d = ts.filter(t => t.status === 'done').length;
       const next = ts.filter(t => t.status === 'todo').sort((a, b) => (!!b.today - !!a.today) || (b.urgency || 0) - (a.urgency || 0))[0];
       return `<div class="gb c-${col(g.color)}">
         <button class="gb-head" data-act="goal-open" data-id="${g.id}"><span class="dot"></span><b>${esc(g.title)}</b><span class="goal-n">${ts.length ? `${d}/${ts.length}` : ''}</span></button>
         ${ts.length ? `<div class="progress thin"><i style="transform:scaleX(${d / ts.length})"></i></div>` : ''}
-        ${next ? `<div class="gb-next"><span class="muted">次</span><button class="gb-q" data-act="task-edit" data-id="${next.id}">${esc(next.title)}</button><button class="t-play sm" data-act="now-from" data-id="${next.id}" aria-label="いまやる"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg></button></div>`
+        ${low && (shownNext || !next) ? '' : next ? (shownNext = true, `<div class="gb-next"><span class="muted">次</span><button class="gb-q" data-act="task-edit" data-id="${next.id}">${esc(next.title)}</button><button class="t-play sm" data-act="now-from" data-id="${next.id}" aria-label="いまやる"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg></button></div>`)
           : `<div class="gb-next"><span class="muted">次の一手がまだありません</span></div>`}
-        <div class="gb-acts"><button class="btn sm ai-btn" data-act="ai-goal" data-id="${g.id}">✦ AIに分けてもらう</button><button class="btn sm ghost" data-act="goal-add-task" data-id="${g.id}">＋ 自分で足す</button></div>
+        ${low ? '' : `<div class="gb-acts"><button class="btn sm ai-btn" data-act="ai-goal" data-id="${g.id}">✦ AIに分けてもらう</button><button class="btn sm ghost" data-act="goal-add-task" data-id="${g.id}">＋ 自分で足す</button></div>`}
       </div>`;
     }).join('')}
   </section>`;
@@ -311,6 +317,7 @@ function viewHome() {
     <section class="card buddy">
       <div class="eyebrow">相棒に聞く <small>${store.ask ? 'MacのClaudeが答えます' : 'クラウドにつなぐと使えます'}</small></div>
       <form class="field" data-form="askAI"><input name="t" placeholder="例：今日なにから手をつける？" autocomplete="off" enterkeyhint="send"><button class="btn primary">聞く</button></form>
+      ${chat.length ? `<div class="row"><button class="btn sm" data-act="chat-open">${chatBusy ? '答えを待っています…' : '続きを見る'}（${chat.filter(m => m.role === 'user').length}）</button></div>` : ''}
       <div class="chips no-swipe">${['今日なにから手をつける？', '今の自分に合う休み方は？', '目標に向けて、今週やるべき1つは？'].map(q => `<button type="button" class="chip" data-act="ask-quick" data-v="${esc(q)}">${esc(q)}</button>`).join('')}</div>
     </section>
     ${aiFresh ? `<section class="card ai-card"><div class="ai-dot">AI</div><div style="min-width:0">
@@ -458,8 +465,8 @@ function viewToday() {
   </div>
   <div class="col">
     <section class="card">
-      <div class="eyebrow">あとで <small>${later.length}件・急ぎの順</small></div>
-      ${later.length ? later.slice(0, 40).map(t => taskRow(t, { later: true })).join('') : '<div class="empty">「いつかやる」をここに置いておけます</div>'}
+      ${st === 'low' && later.length ? `<details><summary>あとで（${later.length}件）・今日は見なくて大丈夫</summary>${later.slice(0, 40).map(t => taskRow(t, { later: true })).join('')}</details>` : `<div class="eyebrow">あとで <small>${later.length}件・急ぎの順</small></div>
+      ${later.length ? later.slice(0, 40).map(t => taskRow(t, { later: true })).join('') : '<div class="empty">「いつかやる」をここに置いておけます</div>'}`}
     </section>
     <section class="card">
       <div class="eyebrow">思いついたら投げ込む</div>
@@ -719,8 +726,9 @@ const actions = {
     const picked = [...document.querySelectorAll('#sheet .sug:not(.off)')].map(b => aiSug[+b.dataset.i]).filter(Boolean);
     if (!picked.length) return toast('採用するものを残してください');
     if (aiCtx.kind === 'goal') {
-      picked.forEach(q => addTask({ title: q.title, color: ['red', 'blue', 'green'].includes(q.color) ? q.color : 'blue', size: [1, 2, 3].includes(+q.size) ? +q.size : 1, goalId: aiCtx.g.id, today: null, source: 'ai', note: q.why || '' }));
-      closeSheet(); toast(`${picked.length}件を「あとで」に足しました（今日やるものは＋で移せます）`); buzz(15);
+      Promise.all(picked.map(q => addTask({ title: q.title, color: ['red', 'blue', 'green'].includes(q.color) ? q.color : 'blue', size: [1, 2, 3].includes(+q.size) ? +q.size : 1, goalId: aiCtx.g.id, today: null, source: 'ai', note: q.why || '' })))
+        .then(ids => toast(`${picked.length}件を「あとで」に足しました`, '取り消す', () => ids.filter(Boolean).forEach(id => store.del('tasks', id))));
+      closeSheet(); buzz(15);
     } else {
       const t = S.tasks.find(x => x.id === aiCtx.t.id); const prev = t.steps || [];
       write(store.set('tasks', t.id, { steps: [...prev, ...picked.map(q => ({ t: q.title, done: false }))] }));
@@ -749,7 +757,7 @@ const actions = {
   'task-edit'(id) { const t = S.tasks.find(x => x.id === id); if (t) openSheet(`<h3>クエストを直す</h3>${taskForm(t)}`); },
   'task-store'(id) { write(store.set('tasks', id, { status: 'stored' })); closeSheet(); toast('しまいました（消してはいません）', '戻す', () => store.set('tasks', id, { status: 'todo' })); },
   'add-open'() { openSheet(`<h3>クエストを足す</h3>${taskForm({})}`); },
-  'now-from'(id) { const t = S.tasks.find(x => x.id === id); if (t) { write(store.set('meta', 'now', { text: t.title, taskId: id, since: now(), timerEnd: null })); setTab('now'); buzz(10); } },
+  'now-from'(id) { const t = S.tasks.find(x => x.id === id); if (t) { write(store.set('meta', 'now', { text: t.title, taskId: id, since: now(), timerEnd: null })); buzz(10); if (tab !== 'home') toast(`いまやること：${t.title}`, 'ボードで見る', () => setTab('home')); } },
   'now-done'() { const n = meta('now'); if (n.taskId) actions.toggle(n.taskId, $('.now-card')); },
   'now-edit'() { const n = meta('now'); openSheet(`<h3>いまやってること</h3><form data-form="now"><input class="full" name="t" value="${esc(n.text)}" autocomplete="off" enterkeyhint="done"><div class="row end"><button class="btn primary">変える</button></div></form>`); },
   'now-clear'() { write(store.set('meta', 'now', { text: '', taskId: null, since: null, timerEnd: null })); toast('ひと区切り。おつかれさまでした'); },
@@ -803,14 +811,15 @@ const actions = {
   'goal-open'(id) { const g = S.goals.find(x => x.id === id); if (g) openSheet(goalSheet(g)); },
   'goal-arch'(id) { write(store.set('goals', id, { archived: true })); closeSheet(); toast('目標をしまいました', '戻す', () => store.set('goals', id, { archived: false })); },
   'goal-add-task'(id) { openSheet(`<h3>クエストを足す</h3>${taskForm({ goalId: id, today: null })}`); },
-  state(_, el) { setLog({ state: el.dataset.v }); buzz(10); },
+  state(_, el) { setLog({ state: el.dataset.v }); buzz(10); repaintCompass(); },
   mode(_, el) {
     const k = el.dataset.v, cur = meta('mode');
     write(store.set('meta', 'mode', cur.mode === k ? { mode: null, since: null } : { mode: k, since: now() }));
     if (cur.mode !== k) { buzz([20, 30, 20]); if (prefs.sound) chime(k === 'gm' ? [392, 784] : [523, 784]); }
+    repaintCompass();
   },
   'onboard-skip'() { prefs.onboarded = true; savePrefs(); render(); },
-  'word-next'() { cardShift++; render(); },
+  'word-next'() { cardShift++; render(); repaintCompass(); },
   'idea-open'(id) { const i = S.ideas.find(x => x.id === id); if (i) openSheet(ideaSheet(i)); },
   'idea-task'(id) { const i = S.ideas.find(x => x.id === id); if (i) openSheet(`<h3>タスクにする</h3>${taskForm({ title: i.text, score: i.score })}`, f => { f.dataset.idea = id; }); },
   'idea-arch'(id) { write(store.set('ideas', id, { archived: true })); closeSheet(); toast('しまいました', '戻す', () => store.set('ideas', id, { archived: false })); },
@@ -821,8 +830,13 @@ const actions = {
     const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), ...S }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `シルベ_${dkey()}.json`; a.click();
   },
-  signout() { store.signOut(); closeSheet(); },
-  'chat-new'() { chat = []; closeSheet(); toast('新しく話せます'); },
+  async signout() {
+    const left = store.pending?.() || 0;
+    if (left && !confirm(`まだ保存できていない記録が${left}件あります。ログアウトすると消えます。それでもログアウトしますか？`)) return;
+    await store.signOut(); closeSheet();
+  },
+  'chat-new'() { if (chatBusy) return toast('いまの答えを待っています'); chat = []; closeSheet(); safeRender(); toast('新しく話せます'); },
+  'chat-open'() { openChat(); },
 };
 
 function habitSheet() {
@@ -908,9 +922,10 @@ document.addEventListener('click', e => {
     buzz(5); return;
   }
   const b = e.target.closest('[data-act]');
-  if (b && actions[b.dataset.act]) { e.preventDefault(); actions[b.dataset.act](b.dataset.id, b); return; }
+  if (b && actions[b.dataset.act]) { e.preventDefault(); fromSheet = !!b.closest('#sheet'); actions[b.dataset.act](b.dataset.id, b); fromSheet = false; return; }
   const d = e.target.closest('.dock button'); if (d) setTab(d.dataset.tab);
 });
+document.addEventListener('input', e => { if (e.target.closest?.('#view [data-form]')) e.target.dataset.typed = '1'; });
 document.addEventListener('change', e => {
   if (e.target.name === 'useScore') {
     const f = e.target.closest('form');
@@ -1013,9 +1028,11 @@ function listen(ta) {
 }
 
 
+function repaintCompass() { setTimeout(() => { const c = $('#sheet .sheet-cols'); if (c) c.innerHTML = viewCompass(); }, 60); }
+
 /* ================= AI相棒（MacのClaudeが答える。store.ask） ================= */
-let aiCtx = null, aiSug = [], chat = [];
-const aiWait = st => ({ sent: 'Macの相棒に渡しました…', working: '相棒が考えています（30秒ほど）…', late: 'Macが眠っているようです。Macが起きたら答えます（このまま待てます）' }[st] || '');
+let aiCtx = null, aiSug = [], chat = [], aiReq = 0, chatBusy = false;
+const aiWait = st => ({ sent: 'Macの相棒に渡しました…', working: '相棒が考えています（30秒ほど）…', late: 'Macが眠っているかもしれません。15分以内にMacが起きれば答えます' }[st] || '');
 function aiContext() {
   const gs = S.goals.filter(g => !g.archived).map(g => `- ${g.title}${g.why ? `（なぜ：${g.why}）` : ''}`).join('\n') || '（なし）';
   const td = todayTasks().filter(t => t.status === 'todo').map(t => `- ${t.title}`).join('\n') || '（なし）';
@@ -1025,61 +1042,78 @@ function aiContext() {
 function parseJson(text) { const m = text.match(/\{[\s\S]*\}/); if (!m) throw new Error('形が違いました'); return JSON.parse(m[0]); }
 async function aiSuggest(ctx, hint = '') {
   if (!store.ask) return toast('AIはクラウドにつないだ時に使えます');
-  aiCtx = ctx; aiSug = [];
+  aiCtx = ctx; const req = ++aiReq;
   const title = ctx.kind === 'goal' ? `「${ctx.g.title}」をクエストに分ける` : `「${ctx.t.title}」をステップに分ける`;
-  openSheet(`<h3>✦ ${esc(title)}</h3><div class="ai-wait" id="aiWait"><span class="pulse"></span>${aiWait('sent')}</div>`);
+  openSheet(`<h3 data-ai="${req}">✦ ${esc(title)}</h3><div class="ai-wait" id="aiWait"><span class="pulse"></span>${aiWait('sent')}</div>`);
+  const mine = () => req === aiReq && !!$(`#sheet [data-ai="${req}"]`);
   const have = ctx.kind === 'goal' ? S.tasks.filter(t => t.goalId === ctx.g.id && t.status !== 'stored').map(t => `- ${t.title}${t.status === 'done' ? '（済）' : ''}`).join('\n') || '（なし）' : (ctx.t.steps || []).map(x => `- ${x.t}`).join('\n') || '（なし）';
   const prompt = ctx.kind === 'goal'
     ? `${aiContext()}\n\n目標「${ctx.g.title}」${ctx.g.why ? `（なぜ：${ctx.g.why}）` : ''}を達成するためのクエストを3〜5個出してください。\n今あるクエスト：\n${have}\n条件：今あるものと重ねない。1つは15分以内で始められる小さいもの。赤＝感情が動く挑戦、青＝社会・仕事、緑＝回復・整える。size は 1=小 2=中 3=大。${hint ? `\n追加の希望：${hint}` : ''}\n形式：{"quests":[{"title":"","color":"red|blue|green","size":1,"why":"なぜ効くか20字以内"}]}`
     : `${aiContext()}\n\nクエスト「${ctx.t.title}」を、上から順にやれば終わるステップ3〜6個に分けてください。最初のステップは2分で始められるものに。\n今あるステップ：\n${have}${hint ? `\n追加の希望：${hint}` : ''}\n形式：{"quests":[{"title":"","why":""}]}`;
   try {
-    const text = await store.ask({ kind: 'json', prompt }, st => { const w = $('#aiWait'); if (w) w.innerHTML = `<span class="pulse"></span>${aiWait(st)}`; });
+    const text = await store.ask({ kind: 'json', prompt }, st => { const w = mine() && $('#aiWait'); if (w) w.innerHTML = `<span class="pulse"></span>${aiWait(st)}`; }, () => !mine());
+    if (!mine()) return;
     aiSug = (parseJson(text).quests || []).filter(q => q && q.title).slice(0, 8);
-    if (!sheetOpen || aiCtx !== ctx) return;
-    $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button><h3>✦ ${esc(title)}</h3>
+    $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button><h3 data-ai="${req}">✦ ${esc(title)}</h3>
       <p class="muted">要らないものはタップで外せます。残したものだけが足されます</p>
       ${aiSug.map((q, i) => `<button class="sug c-${col(q.color || 'blue')}" data-act="sug-toggle" data-i="${i}"><i></i><span><b>${esc(q.title)}</b>${q.why ? `<small>${esc(q.why)}</small>` : ''}</span></button>`).join('')}
       <div class="row end"><button class="btn primary" data-act="sug-adopt">残したものを足す</button></div>
       <div class="sub-label" style="margin-top:16px">出し直す</div>
       <div class="field"><input id="aiHint" placeholder="例：もっと小さく／週末にできるもの" autocomplete="off"><button class="btn" data-act="ai-retry">出し直す</button></div>`;
   } catch (e) {
-    if (sheetOpen && aiCtx === ctx) $('#sheet').querySelector('#aiWait')?.replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: `うまくいきませんでした：${e.message}。もう一度押してください` }));
+    if (e.message !== 'cancel' && mine()) $('#sheet').querySelector('#aiWait')?.replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: `うまくいきませんでした：${e.message}。もう一度押してください` }));
   }
 }
 async function askBuddy(q) {
-  if (!q) return;
+  if (!q) { if (chat.length) openChat(); return; }
   if (!store.ask) return toast('相棒はクラウドにつないだ時に使えます');
+  if (chatBusy) return toast('いまの答えを待っています');
+  chatBusy = true;
   chat.push({ role: 'user', content: q }); chat = chat.slice(-8);
   const paint = wait => {
     const body = chat.map(m => `<div class="msg ${m.role}">${m.role === 'user' ? esc(m.content) : md(m.content)}</div>`).join('') + (wait ? `<div class="ai-wait" id="aiWait"><span class="pulse"></span>${wait}</div>` : '');
     const html = `<h3>相棒に聞く</h3><div class="chat">${body}</div><form class="field" data-form="askAI"><input name="t" placeholder="続けて聞く" autocomplete="off" enterkeyhint="send"><button class="btn primary">聞く</button></form>
       ${chat.length > 1 ? '<div class="row end"><button class="btn sm ghost" data-act="chat-new">新しく話す</button></div>' : ''}`;
-    if (sheetOpen && $('#sheet .chat')) { $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button>${html}`; } else openSheet(html);
+    if (sheetOpen && $('#sheet .chat')) { $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button>${html}`; } else if (!wait || !sheetOpen) openSheet(html);
     const c = $('#sheet .chat'); if (c) c.scrollTop = c.scrollHeight;
   };
   paint(aiWait('sent'));
   const msgs = [{ role: 'user', content: aiContext() + '\n\n（ここまでが私の今の状況です）' }, ...chat];
   try {
     const text = await store.ask({ kind: 'chat', messages: msgs }, st => { const w = $('#aiWait'); if (w) w.innerHTML = `<span class="pulse"></span>${aiWait(st)}`; });
-    chat.push({ role: 'assistant', content: text }); if ($('#sheet .chat')) paint(''); else toast('相棒が答えました。もう一度開くと読めます');
+    chat.push({ role: 'assistant', content: text }); if ($('#sheet .chat')) paint(''); else toast('相棒が答えました', '開く', openChat);
   } catch (e) { chat.push({ role: 'assistant', content: `（うまくいきませんでした：${e.message}）` }); if ($('#sheet .chat')) paint(''); }
+  chatBusy = false; safeRender();
+}
+function openChat() {
+  openSheet(`<h3>相棒に聞く</h3><div class="chat">${chat.map(m => `<div class="msg ${m.role}">${m.role === 'user' ? esc(m.content) : md(m.content)}</div>`).join('')}${chatBusy ? `<div class="ai-wait"><span class="pulse"></span>${aiWait('working')}</div>` : ''}</div>
+    <form class="field" data-form="askAI"><input name="t" placeholder="続けて聞く" autocomplete="off" enterkeyhint="send"><button class="btn primary">聞く</button></form>
+    <div class="row end"><button class="btn sm ghost" data-act="chat-new">新しく話す</button></div>`);
+  const c = $('#sheet .chat'); if (c) c.scrollTop = c.scrollHeight;
 }
 
 /* ================= シート・トースト ================= */
-let sheetOpen = false;
+let sheetOpen = false, sheetStack = [], fromSheet = false;
 function openSheet(html, after) {
+  if (sheetOpen && fromSheet && !$('#sheet [data-ai]')) sheetStack.push($('#sheet').innerHTML);
+  if (!sheetOpen) { try { history.pushState({ sheet: 1 }, ''); } catch {} }
   $('#sheet').innerHTML = `<div class="grab"></div><button class="sheet-x" data-close aria-label="閉じる">×</button>${html}`;
   $('#sheet').hidden = $('#sheetBg').hidden = false; sheetOpen = true;
   document.body.classList.add('locked');
   const f = $('#sheet form'); if (f && after) after(f);
   if (device() === 'pc') setTimeout(() => $('#sheet input:not([type=checkbox])')?.focus(), 200);
 }
-function closeSheet() {
-  if (!sheetOpen) return; sheetOpen = false;
+function closeSheet(fromPop) {
+  if (!sheetOpen) return;
+  if (sheetStack.length && fromPop !== 'all') { $('#sheet').innerHTML = sheetStack.pop(); $('#sheet').scrollTop = 0; if (fromPop === true) { try { history.pushState({ sheet: 1 }, ''); } catch {} } return; }
+  if (fromPop !== true && history.state?.sheet) { ignorePop = true; try { history.back(); } catch {} }
+  sheetOpen = false;
   $('#sheet').hidden = $('#sheetBg').hidden = true; $('#sheet').innerHTML = '';
   document.body.classList.remove('locked'); if (pending) safeRender();
 }
-$('#sheetBg').onclick = closeSheet;
+$('#sheetBg').onclick = () => closeSheet();
+let ignorePop = false;
+addEventListener('popstate', () => { if (ignorePop) { ignorePop = false; return; } if (sheetOpen) closeSheet(true); });
 $('#sheet').addEventListener('click', e => { if (e.target.closest('[data-close]')) closeSheet(); });
 // 下に引っ張って閉じる
 let dragY = null;
@@ -1129,9 +1163,9 @@ function openSettings() {
   <div class="set-row"><span>効果音</span><button class="chip ${prefs.sound ? 'on' : ''}" data-act="pref-sound">${prefs.sound ? 'オン' : 'オフ'}</button></div>
   <div class="set-row"><span>タイマーの通知</span><button class="chip ${'Notification' in window && Notification.permission === 'granted' ? 'on' : ''}" data-act="notify-on">${'Notification' in window && Notification.permission === 'granted' ? 'オン' : 'オンにする'}</button></div>
   ${store.mode === 'cloud' && device() === 'pc' ? `<div class="sub-label">スマホで開く</div><div class="qr" id="qr"></div><p class="muted" style="font-size:12px">iPhoneのカメラで読み取り → Safariで開く → 共有ボタン →「ホーム画面に追加」</p>` : ''}
-  <div class="sub-label">キーボード操作（PC）</div><p class="muted" style="font-size:12px">1〜5でタブ切り替え・Nでクエストを足す・Escで閉じる</p>
+  <div class="sub-label">キーボード操作（PC）</div><p class="muted" style="font-size:12px">1〜4・←→でボード切り替え・Nでクエストを足す・Escで閉じる</p>
   <div class="row" style="justify-content:flex-start"><button class="btn sm" data-act="export">データを書き出す（JSON）</button><button class="btn sm" data-act="restore-pick">書き出したものから戻す</button>${store.mode === 'cloud' ? '<button class="btn sm ghost" data-act="signout">ログアウト</button>' : ''}</div>
-  <p class="muted" style="margin-top:16px;font-size:11px">シルベ v0.4</p>`);
+  <p class="muted" style="margin-top:16px;font-size:11px">シルベ v5</p>`);
   if ($('#qr')) import('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm').then(m => { const q = (m.default || m)(0, 'M'); q.addData(url); q.make(); $('#qr').innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); }).catch(() => { $('#qr').textContent = url; });
 }
 $('#settingsBtn').onclick = openSettings;
