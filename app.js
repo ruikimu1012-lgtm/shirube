@@ -1,5 +1,5 @@
 // シルベ v6 — 行動／戦略／記録／受け取り（＋羅針盤シート・AI相棒・自動の状況カード）
-import { createStore } from './store.js?v=202611222226';
+import { createStore } from './store.js?v=202611222231';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -216,9 +216,11 @@ function render() {
   const drafts = {};
   document.querySelectorAll('#view [data-form] input[name], #view [data-form] textarea[name]').forEach(e => { if (e.type !== 'checkbox' && e.value && e.dataset.typed) drafts[e.closest('[data-form]').dataset.form + '|' + e.name] = e.value; });
   const openD = [...document.querySelectorAll('#view details[open] summary')].map(x => x.textContent);
+  const kx = $('#view .kanban')?.scrollLeft || 0;
   $('#view').innerHTML = views[tab]();
   for (const [k, v] of Object.entries(drafts)) { const [f, n] = k.split('|'); const e = $(`#view [data-form="${f}"] [name="${n}"]`); if (e) { e.value = v; e.dataset.typed = '1'; } }
   document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(x.textContent)) x.parentElement.open = true; });
+  const kb = $('#view .kanban'); if (kb && kx) kb.scrollLeft = kx;
   $('#fab').hidden = !['act', 'plan'].includes(tab);
   const i = BOARDS.findIndex(b => b[0] === tab);
   const dots = $('#dots'); if (dots) dots.innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
@@ -294,10 +296,11 @@ function viewAct() {
 }
 
 // ---- 戦略：価値観 → 目標ごとの列（Boards のように）→ 自動で更新される状況 ----
-let tutorToday = null, tutorAt = 0;
+let tutorToday = null, tutorAt = 0, tutorNote = '';
 function loadTutor() {
   if (!store.readOther || Date.now() - tutorAt < 30 * 60e3) return; tutorAt = Date.now();
-  store.readOther('ai-tutor-data', `briefs/${new Date().toLocaleDateString('sv-SE')}.json`).then(b => { if (b) { tutorToday = b; if (tab === 'plan') safeRender(); } }).catch(() => {});
+  const day = new Date().toLocaleDateString('sv-SE');
+  store.readOther('ai-tutor-data', `briefs/${day}.json`).then(b => { tutorToday = b && b.date === day ? b : null; tutorNote = ''; if (tab === 'plan') safeRender(); }).catch(e => { tutorToday = null; tutorNote = e.status === 403 || e.status === 401 ? '家庭教師のデータを読む権限がありません' : ''; });
 }
 function kanban() {
   const low = moodState() === 'low';
@@ -305,9 +308,10 @@ function kanban() {
   const k = dkey();
   const card = t => `<div class="kcard c-${col(t.color)}"><button class="kc-body" data-act="task-edit" data-id="${t.id}">${t.today && t.today <= k ? '<span class="kc-tag">今日</span>' : ''}${esc(t.title)}${t.steps?.length ? `<small>ステップ ${t.steps.filter(x => x.done).length}/${t.steps.length}</small>` : ''}</button>
     ${t.today && t.today <= k ? '' : `<button class="kc-today" data-act="to-today" data-id="${t.id}" aria-label="今日へ">今日へ</button>`}</div>`;
-  const cols = gs.map(g => {
+  const cols = gs.map((g, gi) => {
     const ts = S.tasks.filter(t => t.goalId === g.id && t.status !== 'stored'), d = ts.filter(t => t.status === 'done').length;
     const todo = ts.filter(t => t.status === 'todo').sort((a, b) => (!!(b.today && b.today <= k) - !!(a.today && a.today <= k)) || (b.urgency || 0) - (a.urgency || 0));
+    if (low && gi > 1) return '';
     return `<div class="kcol c-${col(g.color)}">
       <button class="kcol-head" data-act="goal-open" data-id="${g.id}"><span class="dot"></span><b>${esc(g.title)}</b><span class="goal-n">${ts.length ? `${d}/${ts.length}` : ''}</span></button>
       ${ts.length ? `<div class="progress thin"><i style="transform:scaleX(${d / ts.length})"></i></div>` : ''}
@@ -324,24 +328,24 @@ function kanban() {
     <div class="kanban no-swipe">${cols.join('')}</div></section>`;
 }
 function statusCards() {
-  const pj = meta('status-projects'), os = meta('status-kimuraos'), tu = tutorToday;
-  const list = (pj.list || []).slice(0, 8);
+  const pj = meta('status-projects'), os = meta('status-kimuraos'), tu = tutorToday, low = moodState() === 'low';
+  const list = (pj.list || []).slice(0, low ? 3 : 8);
   const today = new Date(now() - 4 * 3600e3).toLocaleDateString('sv-SE');
   return `
     <section class="card">
       <div class="eyebrow">進行中の取り組み <small>${pj.updatedAt ? `会話から自動・${ago(pj.updatedAt, '前に更新')}` : '会話から自動で更新されます'}</small></div>
       ${list.length ? list.map(p => `<div class="proj"><div class="proj-top"><b>${esc(p.project)}</b>${p.stage ? `<span class="stage">${esc(p.stage)}</span>` : ''}<span class="muted proj-t">${ago(p.updatedAt, '前')}</span></div>
-        <div class="proj-s">${esc(p.status)}</div>${p.next ? `<div class="proj-n"><span>次</span>${esc(p.next)}</div>` : ''}</div>`).join('')
+        <div class="proj-s">${esc(p.status)}</div>${p.next ? `<div class="proj-n"><span>次の候補</span>${esc(p.next)}<button class="proj-send" data-act="proj-next" data-v="${esc(p.next)}" data-p="${esc(p.project)}">受け取り箱へ</button></div>` : ''}</div>`).join('')
         : '<div class="empty">Claude Code・Codexで話した取り組みが、30分ごとにここへ並びます（a-TOPは除く）</div>'}
     </section>
     <section class="card">
       <div class="eyebrow">木村OS <small>${os.date ? (os.date === today ? '今朝の作戦会議' : `${esc(os.date)}の作戦会議`) : '朝の作戦会議から自動'}</small></div>
       ${(os.three || []).length ? `<ol class="os-three">${os.three.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<div class="empty">毎朝7時の作戦会議のあと、今日の3つがここに出ます</div>'}
-      ${os.asks ? `<div class="os-asks">判断待ち <b>${os.asks}</b>件 <span class="muted">（7:30・20:00の承認ウィンドウ）</span></div>` : ''}
+      ${os.asks ? (low ? '<div class="os-asks muted">判断はあとででOKです</div>' : `<div class="os-asks">判断待ち <b>${os.asks}</b>件 <span class="muted">（7:30・20:00の承認ウィンドウ）</span></div>`) : ''}
     </section>
     <section class="card">
       <div class="eyebrow">AI家庭教師 <small>${tu ? '今日の号' : '今日の号はまだ'}</small><a class="eyebrow-act" href="https://ruikimu1012-lgtm.github.io/ai-tutor/" target="_blank" rel="noopener">ひらく ↗</a></div>
-      ${tu ? `<p class="tutor-head">${esc(tu.headline || '')}</p>${tu.lesson?.title ? `<p class="muted">今日のミニ講座：${esc(tu.lesson.title)}</p>` : ''}` : '<div class="empty">毎朝6:35ごろに届きます</div>'}
+      ${tu ? `<p class="tutor-head">${esc(tu.headline || '')}</p>${tu.lesson?.title ? `<p class="muted">今日のミニ講座：${esc(tu.lesson.title)}</p>` : ''}` : `<div class="empty">${tutorNote ? esc(tutorNote) : '毎朝6:35ごろに届きます'}</div>`}
     </section>`;
 }
 function viewPlan() {
@@ -357,7 +361,7 @@ function viewPlan() {
     ${kanban()}
   </div>
   <div class="col">
-    ${statusCards()}
+    ${moodState() === 'low' ? `<section class="card"><details><summary>状況（進行中の取り組み・木村OS・家庭教師）は、今日は見なくて大丈夫</summary>${statusCards()}</details></section>` : statusCards()}
   </div>
   <div class="col">
     <section class="card buddy">
@@ -848,6 +852,7 @@ const undoDone = id => store.set('tasks', id, { status: 'todo', doneAt: null, do
 const actions = {
   go(_, el) { setTab(el.dataset.v); },
 
+  'proj-next'(_, el) { write(store.add('inbox', { kind: 'task', text: el.dataset.v, detail: `進行中の取り組み「${el.dataset.p}」の次の候補`, source: 'claude', project: el.dataset.p, status: 'pending', createdAt: now() })); toast('受け取り箱に入れました（採用は受け取りボードで）'); buzz(8); },
   'compass-open'() { openSheet(`<h3>羅針盤</h3><div class="sheet-cols">${viewCompass()}</div>`); },
   'ask-quick'(_, el) { askBuddy(el.dataset.v); },
   'ai-goal'(id) { const g = S.goals.find(x => x.id === id); if (g) aiSuggest({ kind: 'goal', g }); },

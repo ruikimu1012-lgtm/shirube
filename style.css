@@ -467,3 +467,9 @@ main#view{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
 .os-three{margin:4px 0 0 1.2em;font-size:15px}.os-three li{margin:4px 0}
 .os-asks{margin-top:8px;font-size:14px}.os-asks b{font-size:18px;color:var(--red)}
 .tutor-head{font-size:16px;font-weight:700;line-height:1.5}
+
+/* v6.1 品質レビュー */
+.kc-more{min-height:44px}
+.os-asks b{color:var(--ink)}
+.proj-n span{color:var(--dim);font-weight:500}
+.proj-send{margin-left:8px;font-size:12px;color:var(--accent);min-height:44px;padding:0 4px}

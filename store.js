@@ -1,6 +1,6 @@
 // データの置き場所。firebase-config.js が空なら「この端末だけ」（お試し）、入っていればクラウド（Firebase）
-import { firebaseConfig } from './firebase-config.js?v=202611222226';
-import { githubConfig } from './github-config.js?v=202611222226';
+import { firebaseConfig } from './firebase-config.js?v=202611222231';
+import { githubConfig } from './github-config.js?v=202611222231';
 
 const SDK = 'https://www.gstatic.com/firebasejs/11.0.2/';
 export const COLS = ['tasks', 'inbox', 'logs', 'ideas', 'meta', 'habits', 'goals', 'reviews'];
@@ -147,6 +147,7 @@ function githubStore(cfg) {
     async readOther(repo, path) {
       if (!token) return null;
       const r = await fetch(`https://api.github.com/repos/${cfg.owner}/${repo}/contents/${path}?ref=main&t=${Date.now()}`, { cache: 'no-store', headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' } });
+      if (r.status === 401 || r.status === 403) { const e = new Error('no access'); e.status = r.status; throw e; }
       if (!r.ok) return null; const j = await r.json(); try { return JSON.parse(b64dec(j.content)); } catch { return null; }
     },
     // AIに聞く：asks/<id>.json に置き、MacのClaude（sync/answer.py）が answers/<id>.json に答える。
