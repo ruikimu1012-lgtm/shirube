@@ -1,6 +1,6 @@
 // データの置き場所。firebase-config.js が空なら「この端末だけ」（お試し）、入っていればクラウド（Firebase）
-import { firebaseConfig } from './firebase-config.js?v=202611222231';
-import { githubConfig } from './github-config.js?v=202611222231';
+import { firebaseConfig } from './firebase-config.js?v=202611231359';
+import { githubConfig } from './github-config.js?v=202611231359';
 
 const SDK = 'https://www.gstatic.com/firebasejs/11.0.2/';
 export const COLS = ['tasks', 'inbox', 'logs', 'ideas', 'meta', 'habits', 'goals', 'reviews'];

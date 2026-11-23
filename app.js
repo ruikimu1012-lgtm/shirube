@@ -1,5 +1,5 @@
 // シルベ v6 — 行動／戦略／記録／受け取り（＋羅針盤シート・AI相棒・自動の状況カード）
-import { createStore } from './store.js?v=202611222231';
+import { createStore } from './store.js?v=202611231359';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -59,7 +59,20 @@ const prefs = (() => { try { return JSON.parse(localStorage.getItem('shirube_pre
 const savePrefs = () => { try { localStorage.setItem('shirube_prefs', JSON.stringify(prefs)); } catch {} };
 const meta = id => S.meta.find(m => m.id === id) || {};
 const todayLog = () => S.logs.find(x => x.id === dkey()) || {};
-const write = p => { p?.catch?.(e => toast('保存に失敗しました：' + e.message)); return p; };
+// エラーの控え（直近15件を記録の meta/errlog に残す。木村さんが見た画面の理由をあとでAIが確かめられるように・2026-11-23）
+let errBusy = false;
+function noteErr(where, e) {
+  try {
+    const msg = String(e?.message || e || '').slice(0, 300);
+    if (!msg || msg === 'cancel' || errBusy || !store?.set) return;
+    errBusy = true;
+    const list = [...(meta('errlog').list || []), { at: new Date().toISOString(), where, msg, tab, ua: navigator.userAgent.slice(0, 120) }].slice(-15);
+    Promise.resolve(store.set('meta', 'errlog', { list })).catch(() => {}).finally(() => { errBusy = false; });
+  } catch { errBusy = false; }
+}
+addEventListener('error', ev => noteErr('画面', ev.error || ev.message));
+addEventListener('unhandledrejection', ev => noteErr('画面', ev.reason));
+const write = p => { p?.catch?.(e => { toast('保存に失敗しました：' + e.message); noteErr('保存', e); }); return p; };
 const setLog = data => write(store.set('logs', dkey(), { ...data, updatedAt: now() }));
 
 /* ================= 時間帯の空 ================= */
@@ -1198,6 +1211,7 @@ async function aiSuggest(ctx, hint = '') {
       <div class="sub-label" style="margin-top:16px">出し直す</div>
       <div class="field"><input id="aiHint" placeholder="例：もっと小さく／週末にできるもの" autocomplete="off"><button class="btn" data-act="ai-retry">出し直す</button></div>`;
   } catch (e) {
+    noteErr('AIで分ける', e);
     if (e.message !== 'cancel' && mine()) $('#sheet').querySelector('#aiWait')?.replaceWith(Object.assign(document.createElement('p'), { className: 'muted', textContent: `うまくいきませんでした：${e.message}。もう一度押してください` }));
   }
 }
@@ -1219,7 +1233,7 @@ async function askBuddy(q) {
   try {
     const text = await store.ask({ kind: 'chat', messages: msgs }, st => { const w = $('#aiWait'); if (w) w.innerHTML = `<span class="pulse"></span>${aiWait(st)}`; });
     chat.push({ role: 'assistant', content: text }); if ($('#sheet .chat')) paint(''); else toast('相棒が答えました', '開く', openChat);
-  } catch (e) { chat.push({ role: 'assistant', content: `（うまくいきませんでした：${e.message}）` }); if ($('#sheet .chat')) paint(''); }
+  } catch (e) { noteErr('相棒', e); chat.push({ role: 'assistant', content: `（うまくいきませんでした：${e.message}）` }); if ($('#sheet .chat')) paint(''); }
   chatBusy = false; safeRender();
 }
 function openChat() {
