@@ -1,5 +1,5 @@
 // シルベ v6 — 行動／戦略／記録／受け取り（＋羅針盤シート・AI相棒・自動の状況カード）
-import { createStore } from './store.js?v=202611231359';
+import { createStore } from './store.js?v=202611241423';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -355,6 +355,16 @@ function statusCards() {
       <div class="eyebrow">木村OS <small>${os.date ? (os.date === today ? '今朝の作戦会議' : `${esc(os.date)}の作戦会議`) : '朝の作戦会議から自動'}</small></div>
       ${(os.three || []).length ? `<ol class="os-three">${os.three.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<div class="empty">毎朝7時の作戦会議のあと、今日の3つがここに出ます</div>'}
       ${os.asks ? (low ? '<div class="os-asks muted">判断はあとででOKです</div>' : `<div class="os-asks">判断待ち <b>${os.asks}</b>件 <span class="muted">（7:30・20:00の承認ウィンドウ）</span></div>`) : ''}
+      ${os.summary ? `<p class="os-sum">${esc(os.summary)}</p>` : ''}
+      ${os.tree && os.tree.total ? `<div class="eyebrow" style="margin-top:10px">戦略ツリー（今月のタスク） <small>${os.tree.done}/${os.tree.total} 済</small></div>
+        <div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div style="height:100%;width:${Math.round(100 * os.tree.done / os.tree.total)}%;background:currentColor;opacity:.55"></div></div>
+        ${(os.tree.nextMe || []).length ? `<div class="muted" style="margin-top:6px">木村さんの次</div><ul class="os-list">${os.tree.nextMe.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        ${(os.tree.nextAi || []).length ? `<details class="os-more"><summary>AIの次（${os.tree.nextAi.length}つ）</summary><ul class="os-list">${os.tree.nextAi.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}` : ''}
+      ${os.atop && (os.atop.items || []).length ? `<details class="os-more"><summary>a-TOP：夜に${os.atop.count}件進めた（${esc(os.atop.date)}の夜）</summary><ul class="os-list">${os.atop.items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}
+      ${['night', 'ai', 'askList', 'deadlines'].some(k => (os[k] || []).length) ? `<details class="os-more"><summary>ブリーフをひらく（夜の間に終わったこと・AIが進めたこと・判断・期限）</summary>
+        ${[['night', '夜の間に終わったこと'], ['ai', 'AIが進めておいたこと'], ['askList', '判断してほしいこと'], ['deadlines', '期限が近いもの']].filter(([k]) => (os[k] || []).length)
+          .map(([k, h]) => `<div class="eyebrow" style="margin-top:10px">${h}</div><ul class="os-list">${os[k].map(x => `<li>${esc(x)}</li>`).join('')}</ul>`).join('')}
+      </details>` : ''}
     </section>
     <section class="card">
       <div class="eyebrow">AI家庭教師 <small>${tu ? '今日の号' : '今日の号はまだ'}</small><a class="eyebrow-act" href="https://ruikimu1012-lgtm.github.io/ai-tutor/" target="_blank" rel="noopener">ひらく ↗</a></div>
