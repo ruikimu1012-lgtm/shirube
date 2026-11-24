@@ -473,3 +473,59 @@ main#view{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
 .os-asks b{color:var(--ink)}
 .proj-n span{color:var(--dim);font-weight:500}
 .proj-send{margin-left:8px;font-size:12px;color:var(--accent);min-height:44px;padding:0 4px}
+
+/* ---- 作業ボード（2026-11-24）：スマホは縦に1列、広い画面は4列。?board で全画面 ---- */
+#view>.wb{grid-column:1/-1;min-width:0}
+.wb-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.wb-clock{font-size:26px;font-variant-numeric:tabular-nums;margin-right:10px}
+.wb-pills{display:flex;flex-wrap:wrap;gap:6px}
+.wb-pill{padding:5px 12px;border-radius:99px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair);font-size:13px;color:var(--sub)}
+.wb-pill b{color:var(--ink)}
+.wb-grid{display:grid;grid-template-columns:1fr;gap:0}
+.wb-now{box-shadow:inset 4px 0 0 var(--accent)}
+.wb-big{font-size:clamp(22px,2.6vw,38px);line-height:1.35;font-weight:700;margin:6px 0 10px;word-break:break-word}
+.wb-go{font-size:17px;padding:14px 22px}
+.wb-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:var(--sub);margin-top:2px}
+.wb-chip{padding:1px 8px;border-radius:99px;background:var(--card2);box-shadow:inset 0 0 0 1px var(--hair);font-weight:700}
+.wb-chip.s-atop{color:#2f7d6d}.wb-chip.s-today{color:var(--accent)}.wb-chip.s-tree{color:#6a5fc1}.wb-chip.s-mine{color:#3b7bc4}
+.wb-late{color:#c4453b;font-weight:700}
+.wb-row{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:start;padding:10px 0;border-top:1px solid var(--hair)}
+.wb-row:first-of-type{border-top:0}
+.wb-n{color:var(--dim);font-variant-numeric:tabular-nums;padding-top:2px}
+.wb-t{min-width:0;word-break:break-word}
+.wb-acts{display:flex;gap:6px;align-items:center}
+.wb-acts .btn.sm{padding:5px 10px;font-size:12px}
+.wb-check{width:32px;height:32px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--hair);color:var(--sub);font-weight:700}
+.wb-check:hover{color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.wb-done{padding:6px 0;color:var(--sub);font-size:14px;border-top:1px solid var(--hair)}
+.wb-done:first-of-type{border-top:0}
+.wb-ai{display:flex;gap:10px;align-items:flex-start;margin-top:16px;padding-top:12px;border-top:1px solid var(--hair);font-size:14px}
+@media (max-width:899px){.wb-fin{order:9}}
+@media (min-width:900px){
+  .wb-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px;align-items:start}
+  .wb-now{grid-column:1/-1}
+}
+@media (min-width:1300px){
+  .wb-grid{grid-template-columns:minmax(0,1.5fr) repeat(3,minmax(0,1fr))}
+  .wb-now{grid-column:auto;position:sticky;top:16px}
+  .wb-col{max-height:calc(100dvh - 120px);overflow:auto}
+}
+body.monitor .hud,body.monitor .dock,body.monitor .dots,body.monitor .fab,body.monitor .band{display:none!important}
+body.monitor .shell{max-width:none;padding:20px 24px}
+body.monitor main#view{padding-bottom:20px}
+
+/* 動いているAIの帯 */
+.wb-run{padding:14px 18px}
+.run-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+.run{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:12px;background:var(--card2);box-shadow:inset 0 0 0 1px var(--hair);min-width:0}
+.run i{flex:none;width:10px;height:10px;border-radius:50%;margin-top:7px;background:var(--dim)}
+.run-t{min-width:0;display:flex;flex-direction:column}
+.run-t b{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.run-t small{font-size:12px;color:var(--sub)}
+.r-work i{background:#3aa76d;animation:runp 1.6s ease-in-out infinite}
+.r-wait{box-shadow:inset 0 0 0 2px #e0a325;background:rgba(224,163,37,.12)}
+.r-wait i{background:#e0a325}
+.r-tool i{background:#7a6fd6}
+.r-stop{opacity:.6}
+.r-hot{color:#c98a10;font-weight:700}
+@keyframes runp{0%,100%{opacity:1}50%{opacity:.35}}

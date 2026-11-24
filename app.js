@@ -1,5 +1,5 @@
 // シルベ v6 — 行動／戦略／記録／受け取り（＋羅針盤シート・AI相棒・自動の状況カード）
-import { createStore } from './store.js?v=202611241423';
+import { createStore } from './store.js?v=202611250008';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -52,7 +52,10 @@ try { tab = localStorage.getItem('shirube_tab') || 'act'; } catch {}
 if (['home', 'today', 'now'].includes(tab)) tab = 'act'; if (tab === 'compass') tab = 'plan';
 // 4枚のボード（左右にスワイプ／下のバー／←→キー／1〜4キー）。前に見ていたボードを覚える
 // 見る場面で分ける：行動＝作業中に開きっぱなし／戦略＝優先順位と全体／記録＝見返す／受け取り＝候補の仕分け
-const BOARDS = [['act', '行動'], ['plan', '戦略'], ['log', '記録'], ['inbox', '受け取り']];
+const BOARDS = [['work', '作業'], ['act', '行動'], ['plan', '戦略'], ['log', '記録'], ['inbox', '受け取り']];
+// 作業ボード（2026-11-24）：?board で開くと、それだけを全画面に（作業用モニターに開きっぱなし）
+const MONITOR = /[?&]board\b/.test(location.search) || location.hash === '#board';
+if (MONITOR) { tab = 'work'; document.body.classList.add('monitor'); }
 if (!BOARDS.some(b => b[0] === tab)) tab = 'act';
 const S = { tasks: [], inbox: [], logs: [], ideas: [], meta: [], habits: [], goals: [], reviews: [] };
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('shirube_prefs') || '{}'); } catch { return {}; } })();
@@ -222,7 +225,7 @@ function md(src = '') {
 }
 
 /* ================= 画面 ================= */
-const views = { act: viewAct, plan: viewPlan, inbox: viewInbox, log: viewLog };
+const views = { work: viewWork, act: viewAct, plan: viewPlan, inbox: viewInbox, log: viewLog };
 function render() {
   paintHud(); paintBand();
   document.querySelectorAll('.dock button').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'); });
@@ -234,7 +237,7 @@ function render() {
   for (const [k, v] of Object.entries(drafts)) { const [f, n] = k.split('|'); const e = $(`#view [data-form="${f}"] [name="${n}"]`); if (e) { e.value = v; e.dataset.typed = '1'; } }
   document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(x.textContent)) x.parentElement.open = true; });
   const kb = $('#view .kanban'); if (kb && kx) kb.scrollLeft = kx;
-  $('#fab').hidden = !['act', 'plan'].includes(tab);
+  $('#fab').hidden = MONITOR || !['act', 'plan'].includes(tab);
   const i = BOARDS.findIndex(b => b[0] === tab);
   const dots = $('#dots'); if (dots) dots.innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
   tickTimer();
@@ -256,6 +259,86 @@ const todayTasks = () => {
 const activeHabits = () => S.habits.filter(h => !h.archived).sort((a, b) => Object.keys(SLOTS).indexOf(a.slot) - Object.keys(SLOTS).indexOf(b.slot) || (a.order || 0) - (b.order || 0));
 
 
+
+/* ================= 作業ボード（2026-11-24 木村さん「作業中に見る1枚。今と次が分かる・優先順位が分かる」） ================= */
+// 並びは AI（木村OSの橋が期限と大事さで並べた board）＋シルベの今日のクエスト。「今にする」で選び直せる
+const WB_SRC = { today: '今日の3つ', atop: 'a-TOP', tree: '戦略ツリー', mine: 'シルベ' };
+const wbNorm = t => String(t || '').replace(/[\s（）()・、。]/g, '');
+function wbDue(d) {
+  if (!d) return '';
+  const k = dkey(), n = Math.round((Date.parse(d) - Date.parse(k)) / 864e5);
+  if (n < 0) return '期限切れ'; if (n === 0) return '今日'; if (n === 1) return '明日';
+  return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}・あと${n}日`;
+}
+function workItems() {
+  const os = meta('status-kimuraos'), wb = meta('workboard'), k = dkey(), done = wb.done || {};
+  const titles = new Set(S.tasks.map(t => wbNorm(t.title)));
+  const own = S.tasks.filter(t => t.status === 'todo' && t.today && t.today <= k)
+    .map(t => ({ id: 't:' + t.id, task: t.id, src: 'mine', text: t.title, due: k, min: t.minutes ? `${t.minutes}分` : '', rank: 1 - (t.urgency || 0) * 0.3 }));
+  const ai = (os.board || []).filter(x => !done[x.id] && !titles.has(wbNorm(x.text)));
+  const all = [...ai, ...own].sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || (a.rank ?? 9) - (b.rank ?? 9));
+  const pi = all.findIndex(x => x.id === wb.pin); if (pi > 0) all.unshift(all.splice(pi, 1)[0]);
+  const fin = [...(os.board || []).filter(x => done[x.id] && dkey(new Date(done[x.id] - 4 * 3600e3)) === k).map(x => x.text),
+    ...S.tasks.filter(t => t.status === 'done' && t.doneDay === k).map(t => t.title)];
+  return { all, fin };
+}
+
+// 動いているAIの帯（2026-11-24）：Mac の見張り（_system/scripts/ai-running.js・1分ごと・AI不使用）が live/status-running.json に送る
+const RUN_ST = { wait: ['返事待ち', 'r-wait'], tool: ['実行中か許可待ち', 'r-tool'], work: ['作業中', 'r-work'], stop: ['止まっている', 'r-stop'] };
+function runningBand() {
+  const r = meta('status-running'), list = r.list || [];
+  if (!r.updatedAt) return '';
+  const old = now() - r.updatedAt > 20 * 60e3;
+  const live = list.filter(x => x.state !== 'stop'), stop = list.filter(x => x.state === 'stop');
+  const waitN = list.filter(x => x.state === 'wait').length;
+  const chip = x => `<div class="run ${RUN_ST[x.state][1]}"><i></i><div class="run-t"><b>${esc(x.title)}</b><small>${esc(RUN_ST[x.state][0])}${x.state === 'work' ? '' : `・${ago(x.at, '前')}`}・${esc(x.tool)}${x.place && x.place !== x.title ? `・${esc(x.place)}` : ''}</small></div></div>`;
+  return `<section class="card wb-run">
+    <div class="eyebrow">動いているAI <small>${live.length}件${waitN ? `・<span class="r-hot">返事待ち ${waitN}件</span>` : ''}${old ? `・見張りが${ago(r.updatedAt, '前')}から止まっています` : ''}</small></div>
+    <div class="run-list">${live.length ? live.map(chip).join('') : '<div class="empty">今動いているAIはありません</div>'}</div>
+    ${stop.length ? `<details class="os-more"><summary>止まっている会話 ${stop.length}件</summary><div class="run-list">${stop.map(chip).join('')}</div></details>` : ''}
+  </section>`;
+}
+function viewWork() {
+  const os = meta('status-kimuraos'), low = moodState() === 'low', k = dkey(), ai = meta('ai');
+  const { all, fin } = workItems(), cur = all[0], rest = all.slice(1);
+  const today = rest.filter(x => x.due && x.due <= k), later = rest.filter(x => !x.due || x.due > k);
+  const chip = x => `<span class="wb-chip s-${esc(x.src)}">${esc(WB_SRC[x.src] || '')}</span>`;
+  const meta1 = x => [chip(x), x.due ? `<span class="${x.due < k ? 'wb-late' : ''}">${esc(wbDue(x.due))}</span>` : '', x.min ? `<span>約${esc(String(x.min).replace(/^約/, ''))}</span>` : ''].filter(Boolean).join('');
+  const row = (x, i) => `<div class="wb-row"><b class="wb-n">${i}</b><div class="wb-t"><div>${esc(x.text)}</div><div class="wb-meta">${meta1(x)}</div></div>
+    <div class="wb-acts"><button class="btn sm" data-act="wb-now" data-id="${esc(x.id)}">今にする</button><button class="wb-check" data-act="wb-done" data-id="${esc(x.id)}" aria-label="終わった">✓</button></div></div>`;
+  const aiFresh = ai.text && now() - (ai.updatedAt || 0) < 3 * 3600e3;
+  const tr = os.tree;
+  const info = [os.asks ? `<button class="wb-pill" data-act="go" data-v="inbox">判断待ち <b>${os.asks}</b>件</button>` : '',
+    today.length + (cur ? 1 : 0) ? `<span class="wb-pill">今日 <b>${today.length + (cur && cur.due && cur.due <= k ? 1 : 0)}</b>件</span>` : '',
+    tr && tr.total ? `<span class="wb-pill">今月のタスク <b>${tr.done}/${tr.total}</b></span>` : '',
+    os.atop && os.atop.count ? `<span class="wb-pill">a-TOP 夜に${os.atop.count}件</span>` : ''].filter(Boolean).join('');
+  const clock = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  let n = 2;
+  return `<div class="wb">
+    <div class="wb-top"><div><b class="wb-clock">${clock}</b><span class="muted">${new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' })}</span></div><div class="wb-pills">${info}</div></div>
+    ${runningBand()}
+    <div class="wb-grid">
+      <section class="card wb-now">
+        <div class="eyebrow">今やること</div>
+        ${cur ? `<div class="wb-big">${esc(cur.text)}</div><div class="wb-meta">${meta1(cur)}</div>
+          <div class="row"><button class="btn primary wb-go" data-act="wb-done" data-id="${esc(cur.id)}">終わった ✓</button>${rest.length ? `<button class="btn" data-act="wb-skip" data-id="${esc(cur.id)}">あとにする</button>` : ''}</div>`
+          : '<div class="wb-big muted">今やることは、ありません</div><p class="muted">朝7時の作戦会議のあと、ここに並びます。シルベの今日のクエストも出ます。</p>'}
+      </section>
+      <section class="card wb-col">
+        <div class="eyebrow">今日の残り <small>${today.length}件・上から</small></div>
+        ${today.length ? today.map(x => row(x, n++)).join('') : '<div class="empty">今日の分はこれだけです</div>'}
+      </section>
+      ${low ? '' : `<section class="card wb-col">
+        <div class="eyebrow">このあと <small>期限の近い順</small></div>
+        ${later.length ? later.slice(0, 12).map(x => row(x, n++)).join('') : '<div class="empty">先の予定はまだありません</div>'}
+        ${later.length > 12 ? `<div class="muted">ほか${later.length - 12}件</div>` : ''}
+      </section>`}
+      <section class="card wb-col wb-fin">
+        <div class="eyebrow">今日おわった <small>${fin.length}件</small></div>
+        ${fin.length ? fin.map(t => `<div class="wb-done">✓ ${esc(t)}</div>`).join('') : '<div class="empty">終わった物がここにたまります</div>'}
+      </section>
+    </div></div>`;
+}
 
 /* ================= v6 のボード ================= */
 // ---- 行動：作業中に開きっぱなしにする（いまやること・今日のクエスト・日課） ----
@@ -873,6 +956,18 @@ const decide = (x, status) => write(store.set('inbox', x.id, { status, decidedAt
 const undoDone = id => store.set('tasks', id, { status: 'todo', doneAt: null, doneDay: null });
 
 const actions = {
+  'wb-done'(id, el) {
+    const x = workItems().all.find(i => i.id === id); if (!x) return;
+    if (x.task) { actions.toggle(x.task, el); return; }
+    const wb = meta('workboard'), done = { ...(wb.done || {}) }, cut = now() - 30 * 864e5;
+    for (const [k, v] of Object.entries(done)) if (v < cut) delete done[k];
+    done[id] = now();
+    write(store.set('meta', 'workboard', { done, pin: wb.pin === id ? null : wb.pin || null }));
+    const r = el.getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2); buzz(15);
+    toast(`おわった：${x.text}`, '取り消す', () => { const d2 = { ...(meta('workboard').done || {}) }; delete d2[id]; store.set('meta', 'workboard', { done: d2 }); });
+  },
+  'wb-now'(id) { write(store.set('meta', 'workboard', { pin: id })); buzz(8); scrollTo({ top: 0, behavior: 'smooth' }); },
+  'wb-skip'(id) { const nx = workItems().all.find(i => i.id !== id); write(store.set('meta', 'workboard', { pin: nx ? nx.id : null })); buzz(8); },
   go(_, el) { setTab(el.dataset.v); },
 
   'proj-next'(_, el) { write(store.add('inbox', { kind: 'task', text: el.dataset.v, detail: `進行中の取り組み「${el.dataset.p}」の次の候補`, source: 'claude', project: el.dataset.p, status: 'pending', createdAt: now() })); toast('受け取り箱に入れました（採用は受け取りボードで）'); buzz(8); },
@@ -1356,7 +1451,7 @@ const online = () => { $('#net').hidden = navigator.onLine; };
 addEventListener('online', online); addEventListener('offline', online);
 paintSky(); online();
 let lastDay = dkey();
-setInterval(() => { paintSky(); if (dkey() !== lastDay) { lastDay = dkey(); safeRender(); } else if (tab === 'act' && !sheetOpen) safeRender(); }, 60e3);
+setInterval(() => { paintSky(); if (dkey() !== lastDay) { lastDay = dkey(); safeRender(); } else if ((tab === 'act' || tab === 'work') && !sheetOpen) safeRender(); }, 60e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { paintSky(); safeRender(); } });
 
 let raf, pending = false;
