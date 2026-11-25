@@ -1,5 +1,5 @@
-// シルベ v6 — 行動／戦略／記録／受け取り（＋羅針盤シート・AI相棒・自動の状況カード）
-import { createStore } from './store.js?v=202611251052';
+// シルベ v7 — いま／クエスト／記録（＋受け取り箱・羅針盤・AIはシート。v6 までの部品も残してある）
+import { createStore } from './store.js?v=202611251156';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -47,16 +47,18 @@ const SEED_GOALS = [
   ['価値観に基づく習慣', '習慣：価値観に基づく普遍的な習慣＋計画的偶発性の枠（思いつきを取り込む余白）', 'green'],
 ];
 
-let store, tab = 'act';
-try { tab = localStorage.getItem('shirube_tab') || 'act'; } catch {}
-if (['home', 'today', 'now'].includes(tab)) tab = 'act'; if (tab === 'compass') tab = 'plan';
+let store, tab = 'ima';
+try { tab = localStorage.getItem('shirube_tab') || 'ima'; } catch {}
+// v7（2026-11-25）：ボードは「いま・クエスト・記録」の3枚。前の名前で覚えていても開けるように
+const OLD_TAB = { home: 'ima', today: 'ima', now: 'ima', act: 'ima', work: 'ima', inbox: 'ima', plan: 'quest', compass: 'quest' };
+if (OLD_TAB[tab]) tab = OLD_TAB[tab];
 // 4枚のボード（左右にスワイプ／下のバー／←→キー／1〜4キー）。前に見ていたボードを覚える
 // 見る場面で分ける：行動＝作業中に開きっぱなし／戦略＝優先順位と全体／記録＝見返す／受け取り＝候補の仕分け
-const BOARDS = [['work', '作業'], ['act', '行動'], ['plan', '戦略'], ['log', '記録'], ['inbox', '受け取り']];
+const BOARDS = [['ima', 'いま'], ['quest', 'クエスト'], ['log', '記録']];
 // 作業ボード（2026-11-24）：?board で開くと、それだけを全画面に（作業用モニターに開きっぱなし）
 const MONITOR = /[?&]board\b/.test(location.search) || location.hash === '#board';
-if (MONITOR) tab = 'work'; // 全画面の見た目は「作業」を見ている間だけ（render で付け外し。下のバーは薄く残して他のボードへ行けるように・2026-11-25 v6-8）
-if (!BOARDS.some(b => b[0] === tab)) tab = 'act';
+if (MONITOR) tab = 'ima'; // 全画面の見た目は「作業」を見ている間だけ（render で付け外し。下のバーは薄く残して他のボードへ行けるように・2026-11-25 v6-8）
+if (!BOARDS.some(b => b[0] === tab)) tab = 'ima';
 const S = { tasks: [], inbox: [], logs: [], ideas: [], meta: [], habits: [], goals: [], reviews: [] };
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('shirube_prefs') || '{}'); } catch { return {}; } })();
 const savePrefs = () => { try { localStorage.setItem('shirube_prefs', JSON.stringify(prefs)); } catch {} };
@@ -97,6 +99,7 @@ function xpTotal() {
   S.logs.forEach(l => { if (l.energy != null) xp += 5; xp += Object.values(l.habits || {}).filter(Boolean).length * 3; });
   xp += S.inbox.filter(x => x.status === 'accepted').length * 2;
   xp += S.reviews.filter(r => r.good || r.next).length * 20;
+  S.logs.forEach(l => { xp += Math.min(15, (l.runs || []).filter(r => r.done).length * 3); });   // タイムアタックで倒した分（1日15XPまで）
   return xp;
 }
 function levelInfo(xp) {
@@ -225,9 +228,9 @@ function md(src = '') {
 }
 
 /* ================= 画面 ================= */
-const views = { work: viewWork, act: viewAct, plan: viewPlan, inbox: viewInbox, log: viewLog };
+const views = { ima: viewIma, quest: viewQuest, log: viewLog };
 function render() {
-  document.body.classList.toggle('monitor', MONITOR && tab === 'work');
+  document.body.classList.toggle('monitor', MONITOR && tab === 'ima');
   paintHud(); paintBand();
   document.querySelectorAll('.dock button').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'); });
   const drafts = {};
@@ -238,10 +241,11 @@ function render() {
   for (const [k, v] of Object.entries(drafts)) { const [f, n] = k.split('|'); const e = $(`#view [data-form="${f}"] [name="${n}"]`); if (e) { e.value = v; e.dataset.typed = '1'; } }
   document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(x.textContent)) x.parentElement.open = true; });
   const kb = $('#view .kanban'); if (kb && kx) kb.scrollLeft = kx;
-  $('#fab').hidden = MONITOR || !['act', 'plan'].includes(tab);
+  $('#fab').hidden = MONITOR || !['ima', 'quest'].includes(tab);
   const i = BOARDS.findIndex(b => b[0] === tab);
   const dots = $('#dots'); if (dots) dots.innerHTML = BOARDS.map((b, j) => `<button class="${j === i ? 'on' : ''}" data-act="go" data-v="${b[0]}" aria-label="${b[1]}"></button>`).join('');
-  tickTimer();
+  tickTimer(); tickTA(); initDrag();
+  const sb = $('#sheet [data-sheet]'); if (sb) sb.innerHTML = sb.dataset.sheet === 'ai' ? aiSheetBody() : viewInbox();
 }
 
 function ago(ts, suffix = '前から') {
@@ -425,7 +429,7 @@ let tutorToday = null, tutorAt = 0, tutorNote = '';
 function loadTutor() {
   if (!store.readOther || Date.now() - tutorAt < 30 * 60e3) return; tutorAt = Date.now();
   const day = new Date().toLocaleDateString('sv-SE');
-  store.readOther('ai-tutor-data', `briefs/${day}.json`).then(b => { tutorToday = b && b.date === day ? b : null; tutorNote = ''; if (tab === 'plan') safeRender(); }).catch(e => { tutorToday = null; tutorNote = e.status === 403 || e.status === 401 ? '家庭教師のデータを読む権限がありません' : ''; });
+  store.readOther('ai-tutor-data', `briefs/${day}.json`).then(b => { tutorToday = b && b.date === day ? b : null; tutorNote = ''; if (tab === 'quest') safeRender(); }).catch(e => { tutorToday = null; tutorNote = e.status === 403 || e.status === 401 ? '家庭教師のデータを読む権限がありません' : ''; });
 }
 function kanban() {
   const low = moodState() === 'low';
@@ -957,7 +961,8 @@ function taskForm(t = {}) {
   const adv = !!(t.style || t.reward || t.score || t.goalId || t.urgency);
   return `<form data-form="task" data-id="${t.id || ''}" class="task-form">
     <input class="full title-in" name="title" value="${esc(t.title || '')}" placeholder="例：鋼のメンタル・防衛戦（メール返信）" autocomplete="off" required enterkeyhint="done">
-    <div class="sub-label">色</div>${chipGroup('color', Object.entries(COLORS).map(([k, v]) => [k, `<span class="dot c-${k}"></span>${v}`]), color)}
+    <div class="sub-label">列</div>${chipGroup('lane', LANES.map(l => [l, `<span class="dot c-${LANE_COLOR(l)}"></span>${esc(laneInfo(l).name)}`]), t.id ? taskLane(t) : (t.lane || (t.color && t.color in COLORS ? t.color : 'blue')))}
+    ${quests().filter(q => q.status !== 'done').length ? `<div class="sub-label">クエスト</div>${chipGroup('quest', [['', 'なし'], ...quests().filter(q => q.status !== 'done').map(q => [q.id, `${esc(laneInfo(q.lane || 'blue').mark)}・${esc(q.title)}`])], t.questId || '')}` : ''}
     <div class="sub-label">いつ</div>${chipGroup('when', [['today', '今日やる'], ['later', 'あとで']], today ? 'today' : 'later')}
     <details ${adv ? 'open' : ''}><summary>くわしく設定（目標・判断エンジン・プレイスタイル・報酬）</summary>
       ${goals.length ? `<div class="sub-label">つながる目標</div>${chipGroup('goal', [['', 'なし'], ...goals.map(g => [g.id, esc(g.title)])], t.goalId || '')}` : ''}
@@ -1055,7 +1060,7 @@ const actions = {
   'task-edit'(id) { const t = S.tasks.find(x => x.id === id); if (t) openSheet(`<h3>クエストを直す</h3>${taskForm(t)}`); },
   'task-store'(id) { write(store.set('tasks', id, { status: 'stored' })); closeSheet(); toast('しまいました（消してはいません）', '戻す', () => store.set('tasks', id, { status: 'todo' })); },
   'add-open'() { openSheet(`<h3>クエストを足す</h3>${taskForm({})}`); },
-  'now-from'(id) { const t = S.tasks.find(x => x.id === id); if (t) { write(store.set('meta', 'now', { text: t.title, taskId: id, since: now(), timerEnd: null })); buzz(10); if (tab !== 'act') toast(`いまやること：${t.title}`, '行動ボードへ', () => setTab('act')); } },
+  'now-from'(id) { const t = S.tasks.find(x => x.id === id); if (t) { write(store.set('meta', 'now', { text: t.title, taskId: id, since: now(), timerEnd: null })); buzz(10); if (tab !== 'ima') toast(`いまやること：${t.title}`, 'いまへ', () => setTab('ima')); } },
   'now-done'() { const n = meta('now'); if (n.taskId) actions.toggle(n.taskId, $('.now-card')); },
   'now-edit'() { const n = meta('now'); openSheet(`<h3>いまやってること</h3><form data-form="now"><input class="full" name="t" value="${esc(n.text)}" autocomplete="off" enterkeyhint="done"><div class="row end"><button class="btn primary">変える</button></div></form>`); },
   'now-clear'() { write(store.set('meta', 'now', { text: '', taskId: null, since: null, timerEnd: null })); toast('ひと区切り。おつかれさまでした'); },
@@ -1198,7 +1203,7 @@ const forms = {
   task(f) {
     const useScore = f.useScore?.checked;
     const data = {
-      title: f.title.value.trim(), color: pick(f, 'color'), today: pick(f, 'when') === 'today' ? dkey() : null,
+      title: f.title.value.trim(), lane: pick(f, 'lane') || 'blue', color: (pick(f, 'lane') || 'blue') === 'meta' ? 'blue' : (pick(f, 'lane') || 'blue'), questId: pick(f, 'quest') || '', today: pick(f, 'when') === 'today' ? dkey() : null,
       size: +(pick(f, 'size') || 1), urgency: +(pick(f, 'urg') || 1), style: pick(f, 'style') || '', reward: f.reward?.value.trim() || '',
       goalId: pick(f, 'goal') || '', score: useScore ? readJudge(f) : null,
     };
@@ -1211,6 +1216,500 @@ const forms = {
     closeSheet(); toast(data.today ? '今日のクエストに足しました' : '「あとで」に足しました'); buzz(10);
   },
 };
+
+/* ================= v7（2026-11-25）：いま・クエスト・記録 ================= */
+// 列は聖典の3色＋ゲームマスター。列の名前は記録の中の聖典（meta/bible）から切り出す（言い換えない）。
+// 公開ページには聖典の文を置かない決まりなので、読めない時は色の名前だけを出す。設定で名前を変えられる（meta/lanes）
+const LANES = ['red', 'blue', 'green', 'meta'];
+const LANE_MARK = { red: '赤', blue: '青', green: '緑', meta: 'GM' };
+const MODE_LANE = { red: 'red', blue: 'blue', green: 'green', gm: 'meta' };
+const LANE_COLOR = l => (l === 'meta' ? 'violet' : l);
+function laneInfo(l) {
+  const custom = meta('lanes')[l] || {}, s = bible?.seiten || '';
+  let name = '', sub = '';
+  if (l === 'meta') {
+    const m = s.match(/^#+\s*■?\s*スキル\d+：(ゲームマスター)\s*$/m); if (m) name = m[1];
+    const sec = s.split(/^## /m).find(x => /^■?\s*スキル\d+：ゲームマスター/.test(x)) || '';
+    sub = [...sec.matchAll(/^(\d+)\.\s+(.+)$/gm)].slice(0, 3).map(x => `${x[1]}. ${x[2].trim()}`).join('　');
+  } else {
+    const k = LANE_MARK[l];
+    const m = s.match(new RegExp(`【${k}】([^：*]+)：`)); if (m) name = m[1].trim();
+    const t = s.match(new RegExp(`^\\|\\s*\\*\\*${k}（[^）]*）\\*\\*\\s*\\|\\s*([^|]+?)\\s*\\|`, 'm')); if (t) sub = t[1];
+  }
+  return { mark: LANE_MARK[l], name: custom.name || name || LANE_MARK[l], sub: custom.name ? '' : sub };
+}
+const goalLane = g => !g ? '' : g.lane || (/習慣/.test(g.title) ? 'meta' : /健康/.test(g.title) ? 'green' : /稼/.test(g.title) ? 'blue' : /表現|アーティスト/.test(g.title) ? 'red' : col(g.color));
+const quests = () => S.tasks.filter(t => t.kind === 'quest' && t.status !== 'stored');
+const questById = id => S.tasks.find(t => t.id === id && t.kind === 'quest');
+const isLane = l => LANES.includes(l);
+function boxLane(box) {
+  if (!box) return '';
+  const [k, a] = box.split(':');
+  if (k === 'q') { const q = questById(box.slice(2)); return q ? (isLane(q.lane) ? q.lane : 'blue') : ''; }
+  if (k === 'g') return goalLane(S.goals.find(g => g.id === box.slice(2)));
+  return isLane(a) ? a : '';
+}
+// 名前だけのクエスト（橋が付けた名前）と同じ名前の本物のクエストがあれば、そちらにまとめる
+function resolveBox(box) {
+  if (!box || !box.startsWith('v:')) return box;
+  const [, lane, ...rest] = box.split(':'), name = rest.join(':');
+  const q = quests().find(q => !q.parentId && (q.lane || 'blue') === lane && q.title === name);
+  return q ? 'q:' + q.id : box;
+}
+function boxTitle(box) {
+  const [k] = box.split(':');
+  if (k === 'q') return questById(box.slice(2))?.title || 'クエスト';
+  if (k === 'g') return S.goals.find(g => g.id === box.slice(2))?.title || '目的';
+  if (k === 'v') return box.split(':').slice(2).join(':');
+  return 'そのほか';
+}
+function taskBox(t) {
+  if (t.questId && questById(t.questId)) return 'q:' + t.questId;
+  if (t.box) return resolveBox(t.box);
+  if (t.goalId && S.goals.some(g => g.id === t.goalId)) return 'g:' + t.goalId;
+  return 'x:' + taskLane(t);
+}
+function taskLane(t) {
+  if (isLane(t.lane)) return t.lane;
+  if (t.questId) { const q = questById(t.questId); if (q) return isLane(q.lane) ? q.lane : 'blue'; }
+  if (t.goalId) { const g = S.goals.find(g => g.id === t.goalId); if (g) return goalLane(g); }
+  return col(t.color);
+}
+const tdone = id => (meta('workboard').done || {})[id];
+// 付箋（シルベのタスク＋木村OSの橋が送る物）をひとつの形にそろえる
+function cardsAll() {
+  const k = dkey(), os = meta('status-kimuraos'), wb = meta('workboard'), done = wb.done || {}, place = wb.place || {};
+  const titles = new Set(S.tasks.filter(t => t.kind !== 'quest').map(t => wbNorm(t.title)));
+  const out = [];
+  for (const t of S.tasks) {
+    if (t.kind === 'quest' || t.status === 'stored') continue;
+    const box = taskBox(t);
+    out.push({ id: 't:' + t.id, task: t.id, src: 'mine', text: t.title, lane: boxLane(box) || taskLane(t), box, due: t.due || '', today: !!(t.today && t.today <= k),
+      min: t.minutes ? `${t.minutes}分` : '', rank: 1 - (t.urgency || 0) * 0.3, done: t.status === 'done', doneDay: t.doneDay || '', owner: t.owner || 'me', reward: t.reward || '' });
+  }
+  for (const x of os.board || []) {
+    if (titles.has(wbNorm(x.text))) continue;
+    const p = place[x.id] || {}, lane = isLane(p.lane) ? p.lane : isLane(x.lane) ? x.lane : 'blue';
+    const box = resolveBox(p.box || (x.quest ? `v:${lane}:${x.quest}` : `x:${lane}`));
+    out.push({ ...x, lane: boxLane(box) || lane, box, owner: x.owner || 'me', done: !!done[x.id], doneDay: done[x.id] ? dkey(new Date(done[x.id] - 4 * 3600e3)) : '', today: !!(x.due && x.due <= k) });
+  }
+  return out;
+}
+const dayPlus = n => dkey(addDays(n));
+function inFilter(c, f) {
+  const k = dkey();
+  if (c.done) return f !== 'ima' ? false : c.doneDay === k;
+  if (f === 'ima') return c.owner !== 'ai' && (c.src === 'mine' ? c.today : (!c.due || c.due <= dayPlus(7)));
+  if (f === 'today') return c.today || (c.due && c.due <= k);
+  if (f === 'week') return c.today || !c.due || c.due <= dayPlus(7);
+  return true;
+}
+
+/* ---- 配置（PCとスマホで別々・meta/layout の pc／phone）。データ自体は共通 ---- */
+let layoutPending = {}, layoutTimer = null;
+const blankLayout = () => ({ order: {}, qorder: {}, fold: {} });
+function layoutOf(dev = device()) { const L = layoutPending[dev] || meta('layout')[dev] || {}; return { ...blankLayout(), ...JSON.parse(JSON.stringify(L)) }; }
+function saveLayout(L, dev = device()) {
+  layoutPending[dev] = L;
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => { const P = layoutPending; layoutPending = {}; for (const [d, v] of Object.entries(P)) write(store.set('meta', 'layout', { [d]: { ...v, at: now() } })); }, 1500);
+}
+const sortBy = (list, order, key = x => x.id) => {
+  const idx = new Map((order || []).map((id, i) => [id, i]));
+  return list.map((x, i) => [x, idx.has(key(x)) ? idx.get(key(x)) : 1e4 + i]).sort((a, b) => a[1] - b[1]).map(a => a[0]);
+};
+const defaultCardSort = (a, b) => (a.done - b.done) || (b.today - a.today) || (a.due || '9999').localeCompare(b.due || '9999') || (a.rank ?? 9) - (b.rank ?? 9);
+
+/* ---- 列とクエストの小箱 ---- */
+function buildLane(lane, cards, f, L) {
+  const all = cardsAll();
+  const boxes = new Map();
+  const ensure = key => { if (!boxes.has(key)) boxes.set(key, { key, items: [], subs: [] }); return boxes.get(key); };
+  if (f === 'all') for (const q of quests().filter(q => (q.lane || 'blue') === lane && q.status !== 'done')) ensure('q:' + q.id);
+  for (const c of cards) ensure(c.box).items.push(c);
+  // サブクエストは親の中へ（1段まで）
+  for (const b of [...boxes.values()]) {
+    const q = b.key.startsWith('q:') && questById(b.key.slice(2));
+    if (q && q.parentId && questById(q.parentId)) { const p = ensure('q:' + q.parentId); p.subs.push(b); boxes.delete(b.key); }
+  }
+  const stats = key => {
+    const keys = new Set([key, ...quests().filter(q => 'q:' + q.parentId === key).map(q => 'q:' + q.id)]);
+    const xs = all.filter(c => keys.has(c.box)); return { total: xs.length, done: xs.filter(c => c.done).length };
+  };
+  const list = sortBy([...boxes.values()], L.qorder[lane], b => b.key).sort((a, b) => {
+    const ia = (L.qorder[lane] || []).indexOf(a.key), ib = (L.qorder[lane] || []).indexOf(b.key);
+    if (ia >= 0 || ib >= 0) return (ia < 0 ? 1e4 : ia) - (ib < 0 ? 1e4 : ib);
+    const qa = questById(a.key.slice(2)), qb = questById(b.key.slice(2));
+    return (a.key.startsWith('x:') - b.key.startsWith('x:')) || ((qa?.due || '9999').localeCompare(qb?.due || '9999')) || (b.items.length - a.items.length);
+  });
+  return { list, stats };
+}
+function stickyCard(c) {
+  const k = dkey(), j = dispatchOf(c.id);
+  const bits = [c.src !== 'mine' ? `<span class="wb-chip s-${esc(c.src)}">${esc(WB_SRC[c.src] || '')}</span>` : '',
+    c.due ? `<span class="${c.due < k && !c.done ? 'wb-late' : ''}">${esc(wbDue(c.due))}</span>` : c.today && !c.done ? '<span>今日</span>' : '',
+    c.min ? `<span>約${esc(String(c.min).replace(/^約/, ''))}</span>` : '',
+    j ? `<span class="wb-dsp ${(DSP_ST[j.state] || [])[1] || ''}">${esc((DSP_ST[j.state] || [''])[0])}</span>` : ''].filter(Boolean).join('');
+  const isNow = nowItems().some(n => n.ref === c.id);
+  if (c.owner === 'ai' && !c.done) return `<div class="st st-ai c-${LANE_COLOR(c.lane)}" data-cid="${esc(c.id)}"><button class="st-body" data-act="c-open" data-id="${esc(c.id)}"><span class="st-ai-mark">AI</span><span class="st-t">${esc(c.text)}</span>${bits ? `<small class="st-m">${bits}</small>` : ''}</button></div>`;
+  return `<div class="st c-${LANE_COLOR(c.lane)} ${c.done ? 'done' : ''} ${isNow ? 'is-now' : ''}" data-cid="${esc(c.id)}">
+    <button class="st-body" data-act="c-open" data-id="${esc(c.id)}"><span class="st-t">${esc(c.text)}</span>${bits ? `<small class="st-m">${bits}</small>` : ''}</button>
+    ${c.done ? '<span class="st-ok">✓</span>' : `<div class="st-acts">${isNow ? '' : `<button class="st-play" data-act="c-now" data-id="${esc(c.id)}" aria-label="今やることに" title="今やることに">▶</button>`}<button class="st-chk" data-act="c-done" data-id="${esc(c.id)}" aria-label="終わった" title="終わった">✓</button></div>`}
+  </div>`;
+}
+function questBox(b, f, L, stats, depth = 0) {
+  const q = b.key.startsWith('q:') ? questById(b.key.slice(2)) : null;
+  const items = sortBy(b.items.slice().sort(defaultCardSort), L.order[b.key]);
+  const st = stats(b.key), open = items.filter(c => !c.done).length + b.subs.reduce((a, s) => a + s.items.filter(c => !c.done).length, 0);
+  const cleared = st.total > 0 && st.done === st.total;
+  const fold = L.fold[b.key] ?? (cleared && f !== 'ima');
+  const k = dkey();
+  // ボス：期限のある本物のクエスト。HP＝残り。期限を過ぎても色は変えない（罰なし）
+  const boss = q && q.due;
+  const hp = st.total ? (st.total - st.done) / st.total : 1;
+  const head = `<div class="qhead">
+      <button class="qh-t" data-act="q-open" data-id="${esc(b.key)}"><b>${esc(boxTitle(b.key))}</b>${q?.parentId ? '<span class="qh-sub">サブ</span>' : ''}</button>
+      <span class="qh-n">${cleared ? 'クリア ✓' : st.total ? `${st.done}/${st.total}` : ''}</span>
+      <button class="qh-fold" data-act="q-fold" data-id="${esc(b.key)}" aria-label="${fold ? 'ひらく' : 'たたむ'}">${fold ? '▸' : '▾'}</button>
+    </div>
+    ${boss ? `<div class="hp" title="ボスのHP"><span>HP</span><div class="hp-bar"><i style="transform:scaleX(${hp})"></i></div><small>${esc(wbDue(q.due))}</small></div>`
+      : st.total && !cleared ? `<div class="progress thin"><i style="transform:scaleX(${st.done / st.total})"></i></div>` : ''}`;
+  return `<div class="qbox ${depth ? 'qsub' : ''} ${cleared ? 'cleared' : ''} ${fold ? 'folded' : ''}" data-box="${esc(b.key)}">
+    ${head}
+    ${fold ? (open ? `<div class="q-folded muted">${open}件</div>` : '') : `<div class="qlist" data-box="${esc(b.key)}">${items.map(stickyCard).join('')}</div>
+      ${b.subs.map(s => questBox(s, f, L, stats, 1)).join('')}
+      ${f !== 'ima' ? `<button class="q-add" data-act="c-add" data-id="${esc(b.key)}">＋ 付箋</button>` : ''}`}
+  </div>`;
+}
+let laneOpen = {};
+function lanesHtml(f) {
+  const cards = cardsAll().filter(c => inFilter(c, f)), L = layoutOf(), mode = meta('mode').mode, focus = MODE_LANE[mode];
+  const k = dkey(), low = moodState() === 'low';
+  const order = focus ? [focus, ...LANES.filter(l => l !== focus)] : LANES;
+  return `<div class="lanes ${focus ? 'has-focus' : ''}">${order.map(lane => {
+    const info = laneInfo(lane), mine = cards.filter(c => c.lane === lane);
+    const aiN = cardsAll().filter(c => c.lane === lane && c.owner === 'ai' && !c.done).length;
+    const collapsed = laneOpen[lane] != null ? !laneOpen[lane] : (focus && lane !== focus && mode !== 'muteki');
+    const urgent = mine.filter(c => !c.done && c.owner !== 'ai' && (c.today || (c.due && c.due <= k)));
+    const { list, stats } = buildLane(lane, mine, f, L);
+    const shown = low && f === 'ima' ? list.slice(0, 1) : list;
+    return `<section class="lane c-${LANE_COLOR(lane)} ${collapsed ? 'collapsed' : ''} ${focus === lane ? 'focus' : ''}">
+      <button class="lane-head" data-act="lane-toggle" data-id="${lane}"><span class="lane-mark">${esc(info.mark)}</span><span class="lane-name"><b>${esc(info.name)}</b>${info.sub && !collapsed ? `<small>${esc(info.sub)}</small>` : ''}</span>
+        <span class="lane-n">${mine.filter(c => !c.done && c.owner !== 'ai').length || ''}${aiN ? `<em>AI ${aiN}</em>` : ''}</span><span class="lane-fold">${collapsed ? '▸' : '▾'}</span></button>
+      ${collapsed ? (urgent.length ? `<div class="lane-urgent">${urgent.slice(0, 4).map(stickyCard).join('')}</div>` : '')
+        : `<div class="lane-body" data-lane="${lane}">${shown.map(b => questBox(b, f, L, stats)).join('') || `<div class="kc-empty">${f === 'ima' ? '今日の付箋はありません' : 'まだありません'}</div>`}</div>
+        ${f !== 'ima' ? `<button class="q-add q-new" data-act="q-new" data-id="${lane}">＋ クエスト</button>` : ''}`}
+    </section>`;
+  }).join('')}</div>`;
+}
+
+/* ---- 今やること（複数）＋タイムアタック ---- */
+const TA_MIN = [5, 15, 25, 50];
+const nowItems = () => meta('nowlist').items || [];
+const setNow = items => write(store.set('meta', 'nowlist', { items, updatedAt: now() }));
+const mmss = ms => `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+function nowCards() {
+  const items = nowItems(), cards = new Map(cardsAll().map(c => [c.id, c]));
+  const one = n => {
+    const c = cards.get(n.ref), lane = (c && c.lane) || n.lane || 'blue', ta = n.ta;
+    return `<section class="card wb-now now7 c-${LANE_COLOR(lane)}" data-ref="${esc(n.ref)}">
+      <div class="eyebrow">今やること <small>${esc(laneInfo(lane).name)}${c && c.box ? `・${esc(boxTitle(c.box))}` : ''}</small></div>
+      <div class="wb-big">${esc(n.text)}</div>
+      ${ta ? `<div class="ta" data-start="${ta.start}" data-min="${ta.min}"><b class="ta-t">--:--</b><span class="ta-l">${ta.min ? `${ta.min}分で倒す` : '計測中'}</span></div>`
+        : `<div class="ta-pick"><span class="muted">タイムアタック</span>${TA_MIN.map(m => `<button class="btn sm" data-act="ta" data-id="${esc(n.ref)}" data-v="${m}">${m}分</button>`).join('')}<button class="btn sm ghost" data-act="ta" data-id="${esc(n.ref)}" data-v="0">決めずに測る</button></div>`}
+      <div class="row"><button class="btn primary wb-go" data-act="ta-done" data-id="${esc(n.ref)}">倒した ✓</button><button class="btn ghost" data-act="now-off" data-id="${esc(n.ref)}">ひと区切り</button></div>
+    </section>`;
+  };
+  return `<div class="now-row n${Math.min(items.length, 3)}">${items.map(one).join('')}
+    ${items.length < 3 ? `<section class="card now-add"><div class="eyebrow">${items.length ? 'もう1つ選ぶ' : '今やること'}</div>
+      ${items.length ? '' : '<p class="muted">付箋の ▶ を押すと、ここに並びます（3つまで）</p>'}
+      <form class="field" data-form="nowfree"><input name="t" placeholder="いま、何をやる？" autocomplete="off" enterkeyhint="go"><button class="btn">始める</button></form></section>` : ''}
+  </div>`;
+}
+let taRung = new Set(), taLoop;
+function tickTA() {
+  clearInterval(taLoop);
+  const els = [...document.querySelectorAll('.ta[data-start]')]; if (!els.length) return;
+  const step = () => els.forEach(el => {
+    const start = +el.dataset.start, min = +el.dataset.min, t = el.querySelector('.ta-t'); if (!t) return;
+    if (!min) { t.textContent = mmss(now() - start); return; }
+    const left = start + min * 60e3 - now();
+    if (left >= 0) { t.textContent = mmss(left); el.classList.remove('over'); }
+    else {
+      t.textContent = `+${Math.ceil(-left / 60000)}分`; el.classList.add('over');
+      const key = start + ':' + min;
+      if (!taRung.has(key) && -left < 60e3 && document.visibilityState === 'visible') { taRung.add(key); chime([784, 988, 1175]); buzz([60, 60, 60]); notify('時間です', '倒したら「倒した ✓」。まだなら、そのまま続けてOK'); }
+    }
+  });
+  step(); taLoop = setInterval(step, 1000);
+}
+function recordRun(n, done) {
+  if (!n.ta) return null;
+  const actual = Math.max(1, Math.round((now() - n.ta.start) / 60000));
+  const runs = [...(todayLog().runs || []), { text: n.text, ref: n.ref, lane: n.lane || '', plan: n.ta.min || 0, actual, at: now(), done }];
+  setLog({ runs });
+  if (!done) return { actual };
+  const key = wbNorm(n.text);
+  const prev = S.logs.flatMap(l => l.runs || []).filter(r => r.done && wbNorm(r.text) === key && r.at < now() - 1000).sort((a, b) => b.at - a.at)[0];
+  return { actual, faster: prev && prev.actual > actual ? prev.actual - actual : 0 };
+}
+function markCardDone(id, el) {
+  if (id.startsWith('t:')) { const t = S.tasks.find(x => x.id === id.slice(2)); if (t && t.status !== 'done') actions.toggle(t.id, el); return; }
+  if (id.startsWith('f:')) return;
+  const wb = meta('workboard'), done = { ...(wb.done || {}) }, cut = now() - 30 * 864e5;
+  for (const [k, v] of Object.entries(done)) if (v < cut) delete done[k];
+  done[id] = now(); write(store.set('meta', 'workboard', { done }));
+  if (el) { const r = el.getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2); } buzz(15);
+}
+
+/* ---- いま気にする物（全モードで出す）：AIの確認待ち・判断待ち ---- */
+function attention() {
+  const d = meta('status-dispatch'), asks = (d.jobs || []).filter(j => j.state === 'ask'), os = meta('status-kimuraos');
+  if (!asks.length && !os.asks) return '';
+  return `<section class="card attn"><div class="eyebrow">確認待ち <small>どのモードでも出ます</small></div>
+    ${asks.map(j => `<div class="attn-row"><div class="attn-t"><b>${esc(j.text)}</b>${j.first ? `<small>${esc(j.first)}</small>` : ''}</div>
+      <div class="attn-a"><button class="btn sm primary" data-act="ai-yes" data-id="${esc(j.id)}">Yes で続ける</button>${device() === 'pc' && j.sid ? `<a class="btn sm ghost" href="${vsLink(j.sid, j.kind)}">VS Code で見る</a>` : ''}</div></div>`).join('')}
+    ${os.asks ? `<div class="attn-row"><div class="attn-t"><b>判断待ち ${os.asks}件</b><small>7:30・20:00の承認ウィンドウ（チーフの承認キュー）</small></div></div>` : ''}
+  </section>`;
+}
+
+/* ---- AIの小さな表示 ---- */
+const vsLink = (sid, kind = 'claude') => `vscode://kimura-local.session-restore/open?sid=${encodeURIComponent(sid)}&kind=${encodeURIComponent(kind || 'claude')}`;
+const fileLink = p => /^https?:/.test(p) ? p : `vscode://file${encodeURI(p)}`;
+function aiMini() {
+  const r = meta('status-running'), d = meta('status-dispatch');
+  const live = (r.list || []).filter(x => x.state !== 'stop').length, jobs = (d.jobs || []).filter(j => !['done', 'stale', 'cancel'].includes(j.state)).length;
+  const ask = (d.jobs || []).filter(j => j.state === 'ask').length, wait = (r.list || []).filter(x => x.state === 'wait').length;
+  const fin = (d.jobs || []).filter(j => j.state === 'done' && (j.out || []).length).length;
+  return `<button class="ai-mini ${ask ? 'hot' : live + jobs ? 'on' : ''}" data-act="ai-sheet" title="動いているAI・任せた仕事"><i></i>AI ${live + jobs}${ask ? `・確認${ask}` : wait ? `・返事待ち${wait}` : ''}${fin ? `・📦${fin}` : ''}</button>`;
+}
+function aiSheetBody() {
+  const r = meta('status-running'), d = meta('status-dispatch'), wb = meta('workboard'), pc = device() === 'pc';
+  const jobs = d.jobs || [], live = (r.list || []);
+  const link = (sid, kind) => sid ? (pc ? `<a class="btn sm ghost" href="${vsLink(sid, kind)}">VS Code で開く</a>` : '<span class="muted pc-only">PCで開く</span>') : '';
+  const outs = j => (j.out || []).map(p => pc || /^https?:/.test(p) ? `<a class="chest" href="${esc(fileLink(p))}" ${/^https?:/.test(p) ? 'target="_blank" rel="noopener"' : ''}>📦 ${esc(p.split('/').pop())}</a>` : `<span class="chest muted">📦 ${esc(p.split('/').pop())}（PCで開く）</span>`).join('');
+  const job = j => { const [l, c] = DSP_ST[j.state] || ['', '']; return `<div class="run ${c}"><i></i><div class="run-t"><b>${esc(j.text)}</b><small>${esc(l)}・${esc(j.tool || '')}・${ago(j.last || j.at, '前')}${j.first ? `<br>${esc(j.first)}` : ''}</small>
+    <div class="run-a">${j.state === 'ask' ? `<button class="btn sm primary" data-act="ai-yes" data-id="${esc(j.id)}">Yes で続ける</button>` : ''}${link(j.sid, j.kind)}${outs(j)}</div></div></div>`; };
+  const chat = x => `<div class="run ${RUN_ST[x.state]?.[1] || ''}"><i></i><div class="run-t"><b>${esc(x.title)}</b><small>${esc(RUN_ST[x.state]?.[0] || '')}・${esc(x.tool)}${x.place && x.place !== x.title ? `・${esc(x.place)}` : ''}・${ago(x.at, '前')}</small>
+    <div class="run-a">${x.panel ? '<span class="muted">VS Code の Claude パネルの会話（タブへは飛べません）</span>' : link(x.sid, x.kind)}</div></div></div>`;
+  const autoOff = !!wb.autoOff;
+  return `<div class="set-row"><span>AIでできる物を自動で任せる</span><button class="chip ${autoOff ? '' : 'on'}" data-act="auto-toggle">${autoOff ? '止めています' : 'オン'}</button></div>
+    <p class="muted" style="font-size:12px">今日 ${d.autoToday || 0} / ${d.autoMax || 3} 件（上限）。外に送る・公開・お金・消す/移す/上書き・契約/ログイン・a-TOPの外向きは、手前で止まって「確認待ち」に出ます${d.waitWhy ? `。待っている理由：${esc(d.waitWhy)}` : ''}</p>
+    <div class="sub-label">任せた仕事 <small>${jobs.length}件</small></div>
+    <div class="run-list">${jobs.length ? jobs.map(job).join('') : '<div class="empty">今はありません</div>'}</div>
+    <div class="sub-label">動いている会話 <small>${live.filter(x => x.state !== 'stop').length}件${r.updatedAt && now() - r.updatedAt > 20 * 60e3 ? `・見張りが${ago(r.updatedAt, '前')}から止まっています` : ''}</small></div>
+    <div class="run-list">${live.length ? live.map(chat).join('') : '<div class="empty">今動いているAIはありません</div>'}</div>
+    ${pc ? '' : '<p class="muted" style="font-size:12px;margin-top:10px">スマホからは会話へ飛べません。状態と1行目だけを出しています</p>'}`;
+}
+
+/* ---- 日課（いまのボードでは1行に） ---- */
+function habitsStrip() {
+  const hs = activeHabits(), done = todayLog().habits || {};
+  if (!hs.length) return '';
+  const slots = Object.keys(SLOTS).filter(s => hs.some(h => h.slot === s)), doneN = hs.filter(h => done[h.id]).length;
+  return `<section class="card hstrip"><div class="eyebrow">日課 <small>${doneN} / ${hs.length}</small><button class="eyebrow-act" data-act="habit-edit">編集</button></div>
+    <div class="hs-row no-swipe">${slots.map(s => `<span class="slot-name">${SLOTS[s]}</span>${hs.filter(h => h.slot === s).map(h => `<button class="habit c-${col(h.color)} ${done[h.id] ? 'on' : ''}" data-act="habit" data-id="${h.id}"><i></i>${esc(h.title)}</button>`).join('')}`).join('')}</div></section>`;
+}
+
+/* ---- ボード：いま ---- */
+let legacyNowMoved = false;
+function viewIma() {
+  const st = moodState(), mode = meta('mode'), t = todayLog(), tod = timeOfDay(), h = new Date().getHours();
+  const n0 = meta('now');
+  if (!booting && !legacyNowMoved && !nowItems().length && n0.text) {   // v6 までの「いまやってること」を1つ目に引っ越す
+    legacyNowMoved = true;
+    setNow([{ ref: n0.taskId ? 't:' + n0.taskId : 'f:' + now(), text: n0.text, at: n0.since || now() }]);
+    write(store.set('meta', 'now', { text: '', taskId: null, since: null, timerEnd: null }));
+  }
+  const fresh = !prefs.onboarded && (!S.tasks.length || !S.habits.length || !S.goals.length);
+  const ritualMorning = (tod === 'morning' || tod === 'day') && t.energy == null, ritualNight = h >= 20 || h < 3;
+  const clock = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  const pend = S.inbox.filter(x => x.status === 'pending').length;
+  return `<div class="wide ima">
+    <div class="ima-top">
+      <div class="ima-when"><b class="wb-clock">${clock}</b><span class="muted">${new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' })}</span>
+        <button class="state-pill s-${st}" data-act="compass-open">${STATES[st].name}</button></div>
+      <div class="ima-tools no-swipe">
+        <div class="modes7" role="group" aria-label="モード">${Object.entries(MODES).map(([k, v]) => `<button class="m7 m-${v.c} ${mode.mode === k ? 'on' : ''}" data-act="mode" data-v="${k}" title="${esc(v.name)}モード">${esc(v.name)}</button>`).join('')}</div>
+        ${aiMini()}
+        ${pend ? `<button class="ai-mini" data-act="inbox-open">受け取り ${pend}</button>` : ''}
+      </div>
+    </div>
+    ${fresh ? onboarding() : ''}
+    ${needsReset() ? `<section class="card reset"><div class="eyebrow">リセット・プロトコル</div>
+      <p>ルーティンが崩れた時は、「翌朝の散歩と瞑想」を完了させた時点でOSが完全に再起動（リセット）されたとみなす。</p>
+      <p class="muted" style="margin-top:6px">何日空いても、記録は1つも減っていません。</p></section>` : ''}
+    ${attention()}
+    ${nowCards()}
+    ${habitsStrip()}
+    ${lanesHtml('ima')}
+    <div class="ima-misc">
+      ${ritualMorning ? `<section class="card ritual"><div class="eyebrow">朝の儀 <small>2タップで終わります</small></div>
+        <p class="muted">ゆうべの睡眠</p>${sleepChips(t)}
+        <p class="muted" style="margin-top:12px">いまの気分は？</p>
+        <div class="quick-mood">${[[2, 2, '絶好調'], [1, 1, 'いい感じ'], [0, 0, 'ふつう'], [-1, -1, 'いまいち'], [-2, -2, 'しんどい']].map(([e, p, w]) => `<button data-act="mood" data-e="${e}" data-p="${p}" style="--m:${moodColor(e, p)}"><i></i>${w}</button>`).join('')}</div></section>` : ''}
+      <section class="card">
+        <div class="eyebrow">思いついたら投げ込む <small>あとで受け取り箱で仕分け</small></div>
+        <form data-form="memo"><div class="memo-wrap"><textarea class="full" name="t" rows="2" placeholder="タスクでも、思いつきでも、気持ちでも"></textarea>
+        ${speechOK ? `<button type="button" class="mic" data-act="mic" aria-label="声で入力"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>` : ''}</div>
+        <div class="row end"><button class="btn primary">受け取り箱へ</button></div></form>
+      </section>
+      ${ritualNight ? `<section class="card ritual"><div class="eyebrow">夜のしめくくり</div>
+        <form data-form="night"><input class="full" name="t" value="${esc(t.night || '')}" placeholder="今日いちばん良かったこと、ひとことだけ" autocomplete="off" enterkeyhint="done">
+        <div class="row end"><button class="btn primary">しめくくる</button></div></form></section>` : ''}
+    </div>
+  </div>`;
+}
+
+/* ---- ボード：クエスト（全体・計画） ---- */
+function viewQuest() {
+  loadTutor();
+  const word = todaysWord(), f = prefs.qfilter || 'week';
+  return `
+  <div class="wide">
+    <section class="card values-hero compact">
+      <div class="eyebrow">価値観 <button class="eyebrow-act" data-act="compass-open">羅針盤をひらく</button></div>
+      <div class="three">${valueWords().map(w => `<span>${esc(w)}</span>`).join('')}</div>
+      ${word ? `<p class="hero-word">${esc(word.text)}</p><p class="muted hero-src">${esc(word.head)}（聖典）</p>` : ''}
+    </section>
+    <section class="card lanes-card">
+      <div class="eyebrow">クエスト <small>付箋は${device() === 'phone' ? '長押しで持ち上げて' : 'ドラッグで'}動かせます</small>
+        <span class="qf no-swipe">${[['today', '今日'], ['week', '今週'], ['all', '全部']].map(([k, v]) => `<button class="chip ${f === k ? 'on' : ''}" data-act="qfilter" data-v="${k}">${v}</button>`).join('')}</span></div>
+      ${lanesHtml(f)}
+    </section>
+  </div>
+  <div class="col">
+    ${moodState() === 'low' ? `<section class="card"><details><summary>状況（進行中の取り組み・木村OS・家庭教師）は、今日は見なくて大丈夫</summary>${statusCards()}</details></section>` : statusCards()}
+  </div>
+  <div class="col">
+    <section class="card buddy">
+      <div class="eyebrow">相棒に聞く <small>${store.ask ? 'MacのClaudeが答えます' : 'クラウドにつなぐと使えます'}</small></div>
+      <form class="field" data-form="askAI"><input name="t" placeholder="例：今週なにを優先する？" autocomplete="off" enterkeyhint="send"><button class="btn primary">聞く</button></form>
+      ${chat.length ? `<div class="row"><button class="btn sm" data-act="chat-open">${chatBusy ? '答えを待っています…' : '続きを見る'}（${chat.filter(m => m.role === 'user').length}）</button></div>` : ''}
+      <div class="chips no-swipe">${['今週なにを優先する？', '目標の中で、いま一番効く一手は？', '今の自分に合う休み方は？'].map(q => `<button type="button" class="chip" data-act="ask-quick" data-v="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    </section>
+    ${summaryCard()}
+  </div>`;
+}
+
+/* ---- 付箋・クエストの操作 ---- */
+function boxFields(box) {
+  const [k] = box.split(':'), lane = boxLane(box) || 'blue';
+  if (k === 'q') return { questId: box.slice(2), box: '', lane: '' };
+  if (k === 'g') return { goalId: box.slice(2), questId: '', box: '', lane: '' };
+  if (k === 'v') return { box, questId: '', lane };
+  return { box: '', questId: '', goalId: '', lane };
+}
+function moveCard(id, toBox) {
+  const lane = boxLane(toBox) || 'blue';
+  if (id.startsWith('t:')) { write(store.set('tasks', id.slice(2), { ...boxFields(toBox), color: lane === 'meta' ? 'blue' : lane })); return; }
+  const place = { ...(meta('workboard').place || {}) }; place[id] = { box: toBox, lane }; write(store.set('meta', 'workboard', { place }));
+}
+function questSheet(q = {}, lane = 'blue') {
+  const L = q.lane || lane, parents = quests().filter(x => !x.parentId && x.id !== q.id && x.status !== 'done');
+  return `<h3>${q.id ? 'クエストを直す' : 'クエストを足す'}</h3><form data-form="quest" data-id="${q.id || ''}">
+    <input class="full title-in" name="title" value="${esc(q.title || '')}" placeholder="例：祖父に曲を届ける" autocomplete="off" required enterkeyhint="done">
+    <div class="sub-label">列</div>${chipGroup('lane', LANES.map(l => [l, `<span class="dot c-${LANE_COLOR(l)}"></span>${esc(laneInfo(l).name)}`]), L)}
+    <div class="sub-label">期限 <small>入れるとボス（HPバー）になります</small></div><input class="full" type="date" name="due" value="${esc(q.due || '')}">
+    ${parents.length ? `<div class="sub-label">親のクエスト <small>サブクエストにする時だけ</small></div>${chipGroup('parent', [['', 'なし'], ...parents.map(p => [p.id, esc(p.title)])], q.parentId || '')}` : ''}
+    <div class="row end">${q.id ? `<button type="button" class="btn ghost" data-act="q-store" data-id="${q.id}">しまう</button><button type="button" class="btn" data-act="q-clear" data-id="${q.id}">クエストを終える</button>` : ''}<button class="btn primary">${q.id ? '保存' : '足す'}</button></div>
+  </form>${q.id && !q.parentId ? `<div class="row"><button class="btn sm" data-act="q-sub" data-id="${q.id}">＋ サブクエスト</button></div>` : ''}`;
+}
+function cardSheet(c) {
+  const boxes = []; for (const l of LANES) { const { list } = buildLane(l, cardsAll().filter(x => x.lane === l), 'all', layoutOf()); for (const b of list) { boxes.push([b.key, `${laneInfo(l).mark}・${boxTitle(b.key)}`]); b.subs.forEach(s => boxes.push([s.key, `${laneInfo(l).mark}・${boxTitle(s.key)}`])); } }
+  for (const l of LANES) if (!boxes.some(b => b[0] === 'x:' + l)) boxes.push(['x:' + l, `${laneInfo(l).mark}・そのほか`]);
+  return `<h3>${esc(c.text)}</h3>
+    <p class="muted">${esc(WB_SRC[c.src] || '')}${c.due ? `・${esc(wbDue(c.due))}` : ''}${c.min ? `・約${esc(String(c.min).replace(/^約/, ''))}` : ''}${c.owner === 'ai' ? '・AIの担当（自動で進みます）' : ''}</p>
+    <div class="row">${c.done ? '' : `<button class="btn primary" data-act="c-now" data-id="${esc(c.id)}">今やることに</button><button class="btn" data-act="c-done" data-id="${esc(c.id)}">終わった ✓</button>`}${c.owner !== 'ai' && !c.done ? aiTag(c) : ''}</div>
+    <div class="sub-label">クエストを移す <small>ドラッグでも動かせます</small></div>
+    <div class="chips wrap">${boxes.map(([k, v]) => `<button class="chip ${k === c.box ? 'on' : ''}" data-act="c-move" data-id="${esc(c.id)}" data-v="${esc(k)}">${esc(v)}</button>`).join('')}</div>`;
+}
+const findCard = id => cardsAll().find(c => c.id === id);
+Object.assign(actions, {
+  'c-open'(id) { if (dragging || now() - dragEnd < 400) return; const c = findCard(id); if (!c) return; if (c.task) actions['task-edit'](c.task); else openSheet(cardSheet(c)); },
+  'c-now'(id) {
+    const c = findCard(id); if (!c) return; const items = nowItems();
+    if (items.some(n => n.ref === id)) return toast('もう今やることに入っています');
+    if (items.length >= 3) return toast('今やることは3つまでです。どれかを「ひと区切り」にしてから');
+    setNow([...items, { ref: id, text: c.text, lane: c.lane, at: now() }]); buzz(10); closeSheet('all');
+    if (tab !== 'ima') toast(`今やること：${c.text}`, 'いまへ', () => setTab('ima')); else scrollTo({ top: 0, behavior: 'smooth' });
+  },
+  'c-done'(id, el) { const c = findCard(id); if (!c) return; markCardDone(id, el); setNow(nowItems().filter(n => n.ref !== id)); closeSheet('all'); if (!id.startsWith('t:')) toast(`おわった：${c.text}`, '取り消す', () => { const d2 = { ...(meta('workboard').done || {}) }; delete d2[id]; store.set('meta', 'workboard', { done: d2 }); }); },
+  'c-move'(id, el) { moveCard(id, el.dataset.v); closeSheet('all'); toast('移しました'); },
+  'c-add'(box) { openSheet(`<h3>付箋を足す</h3><p class="muted">${esc(boxTitle(box))}</p><form data-form="cadd" data-box="${esc(box)}"><input class="full" name="t" placeholder="やること" autocomplete="off" required enterkeyhint="done">
+    <div class="sub-label">いつ</div>${chipGroup('when', [['today', '今日やる'], ['later', 'あとで']], 'later')}<div class="row end"><button class="btn primary">足す</button></div></form>`); },
+  ta(ref, el) { const m = +el.dataset.v; askNotify(); setNow(nowItems().map(n => n.ref === ref ? { ...n, ta: { min: m, start: now() } } : n)); buzz(10); toast(m ? `タイムアタック開始：${m}分で倒す` : '計測を始めました'); },
+  'ta-done'(ref, el) {
+    const n = nowItems().find(x => x.ref === ref); if (!n) return;
+    const r = recordRun(n, true); markCardDone(ref, el); setNow(nowItems().filter(x => x.ref !== ref));
+    if (!ref.startsWith('t:')) { const b = el.getBoundingClientRect(); burst(b.left + b.width / 2, b.top + b.height / 2, 20); }
+    if (prefs.sound) chime([784, 1047]);
+    toast(r ? `倒した！ 実時間 ${r.actual}分${n.ta.min ? `（決めた時間 ${n.ta.min}分）` : ''}${r.faster ? `・前回より${r.faster}分早い` : ''}` : `倒した！ ${n.text}`);
+  },
+  'now-off'(ref) { const n = nowItems().find(x => x.ref === ref); if (!n) return; const r = recordRun(n, false); setNow(nowItems().filter(x => x.ref !== ref)); toast(r ? `ひと区切り（${r.actual}分）。おつかれさまでした` : 'ひと区切り。おつかれさまでした'); },
+  'q-new'(lane) { openSheet(questSheet({}, lane)); },
+  'q-open'(box) {
+    if (box.startsWith('q:')) { const q = questById(box.slice(2)); if (q) openSheet(questSheet(q)); return; }
+    openSheet(`<h3>${esc(boxTitle(box))}</h3><p class="muted">名前だけのまとまりです。クエストにすると、期限（ボス）やサブクエストを付けられます</p>
+      <div class="row"><button class="btn primary" data-act="q-make" data-id="${esc(box)}">クエストにする</button><button class="btn" data-act="c-add" data-id="${esc(box)}">＋ 付箋</button></div>`);
+  },
+  'q-make'(box) {
+    const lane = boxLane(box) || 'blue', title = box.startsWith('x:') ? 'そのほか' : boxTitle(box);
+    const p = store.add('tasks', { kind: 'quest', title, lane, status: 'todo', createdAt: now(), source: device() });
+    Promise.resolve(p).then(r => {
+      const qid = r?.id || r; if (!qid || typeof qid !== 'string') return;
+      if (box.startsWith('g:') || box.startsWith('x:')) S.tasks.filter(t => t.kind !== 'quest' && taskBox(t) === box).forEach(t => write(store.set('tasks', t.id, { questId: qid, box: '' })));
+    });
+    closeSheet('all'); toast('クエストにしました');
+  },
+  'q-sub'(pid) { const p = questById(pid); if (p) openSheet(questSheet({ parentId: pid, lane: p.lane }, p.lane)); },
+  'q-store'(id) { write(store.set('tasks', id, { status: 'stored' })); closeSheet('all'); toast('しまいました（消してはいません）', '戻す', () => store.set('tasks', id, { status: 'todo' })); },
+  'q-clear'(id, el) { write(store.set('tasks', id, { status: 'done', doneAt: now(), doneDay: dkey() })); closeSheet('all'); burst(innerWidth / 2, innerHeight / 3, 30); toast('クエストクリア！', '取り消す', () => undoDone(id)); },
+  'q-fold'(box) { const L = layoutOf(), el = document.querySelector(`.qbox[data-box="${CSS.escape(box)}"]`); L.fold[box] = !(el && el.classList.contains('folded')); saveLayout(L); render(); },
+  'lane-toggle'(lane) { const el = document.querySelector(`.lane.c-${LANE_COLOR(lane)}`); laneOpen[lane] = el ? el.classList.contains('collapsed') : true; render(); },
+  qfilter(_, el) { prefs.qfilter = el.dataset.v; savePrefs(); render(); },
+  'ai-sheet'() { openSheet(`<h3>AI</h3><div data-sheet="ai">${aiSheetBody()}</div>`); },
+  'inbox-open'() { openSheet(`<div class="sheet-cols" data-sheet="inbox">${viewInbox()}</div>`); },
+  'ai-yes'(jid) { const wb = meta('workboard'), yes = { ...(wb.yes || {}) }; yes[jid] = { at: now() }; write(store.set('meta', 'workboard', { yes })); buzz(10); toast('Yes を送りました。1分ほどで同じ会話が続きます'); },
+  'auto-toggle'() { const wb = meta('workboard'); write(store.set('meta', 'workboard', { autoOff: !wb.autoOff })); toast(wb.autoOff ? '自動で任せるのを再開しました' : '自動で任せるのを止めました（動いている物はそのまま）'); },
+});
+Object.assign(forms, {
+  nowfree(f) { const t = f.t.value.trim(); if (!t) return; const items = nowItems(); if (items.length >= 3) return toast('今やることは3つまでです'); setNow([...items, { ref: 'f:' + now(), text: t, at: now() }]); f.t.value = ''; buzz(10); },
+  cadd(f) { const t = f.t.value.trim(); if (!t) return; const box = f.dataset.box; const lane = boxLane(box) || 'blue'; addTask({ title: t, ...boxFields(box), color: lane === 'meta' ? 'blue' : lane, today: pick(f, 'when') === 'today' ? dkey() : null }); closeSheet(); toast('付箋を足しました'); buzz(10); },
+  quest(f) {
+    const data = { title: f.title.value.trim(), lane: pick(f, 'lane') || 'blue', due: f.due.value || '', parentId: pick(f, 'parent') || '' };
+    if (!data.title) return;
+    if (f.dataset.id) write(store.set('tasks', f.dataset.id, data)); else write(store.add('tasks', { kind: 'quest', status: 'todo', createdAt: now(), source: device(), ...data }));
+    closeSheet('all'); toast('クエストを保存しました');
+  },
+  lanes(f) { const v = {}; for (const l of LANES) v[l] = { name: f['ln_' + l].value.trim() }; write(store.set('meta', 'lanes', v)); closeSheet(); toast('列の名前を保存しました'); },
+});
+
+/* ---- 付箋を動かす（PC：ドラッグ／iPhone：長押しで持ち上げる） ---- */
+let sortables = [], dragging = false, dragEnd = 0;
+function initDrag() {
+  sortables.forEach(s => { try { s.destroy(); } catch {} }); sortables = [];
+  if (!window.Sortable) return;
+  const common = { animation: 150, delay: 350, delayOnTouchOnly: true, touchStartThreshold: 8, forceFallback: true, fallbackTolerance: 4, fallbackOnBody: true, ghostClass: 'st-ghost', chosenClass: 'st-chosen', dragClass: 'st-drag',
+    onStart() { dragging = true; buzz(25); }, onEnd(ev) { dragging = false; dragEnd = now(); onDrop(ev); } };
+  document.querySelectorAll('#view .qlist').forEach(el => sortables.push(Sortable.create(el, { ...common, group: 'cards', draggable: '.st', filter: '.st-acts button', preventOnFilter: false })));
+  document.querySelectorAll('#view .lane-body').forEach(el => sortables.push(Sortable.create(el, { ...common, group: 'boxes-' + el.dataset.lane, draggable: '.qbox:not(.qsub)', handle: '.qh-t' })));
+}
+function onDrop(ev) {
+  const dev = device(), L = layoutOf(dev), before = JSON.parse(JSON.stringify(L));
+  let undoMove = null;
+  if (ev.item.classList.contains('st')) {
+    const id = ev.item.dataset.cid, from = ev.from.dataset.box, to = ev.to.dataset.box;
+    if (from === to && ev.oldIndex === ev.newIndex) return safeRender();
+    if (from !== to) { const c = findCard(id); moveCard(id, to); undoMove = () => c && moveCard(id, c.box); }
+    for (const el of new Set([ev.from, ev.to])) L.order[el.dataset.box] = [...el.querySelectorAll(':scope > .st')].map(x => x.dataset.cid);
+  } else {
+    if (ev.oldIndex === ev.newIndex) return safeRender();
+    const lane = ev.to.dataset.lane; L.qorder[lane] = [...ev.to.querySelectorAll(':scope > .qbox')].map(x => x.dataset.box);
+  }
+  saveLayout(L, dev); safeRender();
+  toast(`配置を保存しました（${dev === 'phone' ? 'スマホ' : 'PC'}の並び）`, '元に戻す', () => { saveLayout(before, dev); undoMove?.(); safeRender(); });
+}
 
 document.addEventListener('click', e => {
   const chip = e.target.closest('[data-group] .chip');
@@ -1242,16 +1741,18 @@ document.addEventListener('submit', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeSheet();
   if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey) return;
-  const map = { 0: 'work', 1: 'act', 2: 'plan', 3: 'log', 4: 'inbox' };
+  const map = { 0: 'ima', 1: 'ima', 2: 'quest', 3: 'log' };
   if (map[e.key]) setTab(map[e.key]);
+  if (e.key === '4' && !sheetOpen) actions['inbox-open']();
   if (e.key === 'ArrowRight' && !sheetOpen) stepBoard(1);
   if (e.key === 'ArrowLeft' && !sheetOpen) stepBoard(-1);
   if (e.key === 'n') { e.preventDefault(); actions['add-open'](); }
 });
 const boardScroll = {};
 function setTab(t, dir) {
-  if (['now', 'home', 'today'].includes(t)) t = 'act';
   if (t === 'compass') { actions['compass-open'](); return; }
+  if (t === 'inbox') { actions['inbox-open'](); return; }
+  if (OLD_TAB[t]) t = OLD_TAB[t];
   if (t === tab) { scrollTo({ top: 0, behavior: 'smooth' }); return; }
   boardScroll[tab] = scrollY;
   const from = BOARDS.findIndex(b => b[0] === tab), to = BOARDS.findIndex(b => b[0] === t);
@@ -1267,7 +1768,7 @@ $('#view').addEventListener('touchstart', e => {
   sw = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
 }, { passive: true });
 $('#view').addEventListener('touchend', e => {
-  if (!sw) return; const dx = e.changedTouches[0].clientX - sw.x, dy = e.changedTouches[0].clientY - sw.y; const quick = Date.now() - sw.t < 600; sw = null;
+  if (!sw || dragging || now() - dragEnd < 400) { sw = null; return; } const dx = e.changedTouches[0].clientX - sw.x, dy = e.changedTouches[0].clientY - sw.y; const quick = Date.now() - sw.t < 600; sw = null;
   if (quick && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.8) stepBoard(dx < 0 ? 1 : -1);
 }, { passive: true });
 
@@ -1462,9 +1963,11 @@ function openSettings() {
   <div class="set-row"><span>効果音</span><button class="chip ${prefs.sound ? 'on' : ''}" data-act="pref-sound">${prefs.sound ? 'オン' : 'オフ'}</button></div>
   <div class="set-row"><span>タイマーの通知</span><button class="chip ${'Notification' in window && Notification.permission === 'granted' ? 'on' : ''}" data-act="notify-on">${'Notification' in window && Notification.permission === 'granted' ? 'オン' : 'オンにする'}</button></div>
   ${store.mode === 'cloud' && device() === 'pc' ? `<div class="sub-label">スマホで開く</div><div class="qr" id="qr"></div><p class="muted" style="font-size:12px">iPhoneのカメラで読み取り → Safariで開く → 共有ボタン →「ホーム画面に追加」</p>` : ''}
-  <div class="sub-label">キーボード操作（PC）</div><p class="muted" style="font-size:12px">0（作業）・1〜4・←→でボード切り替え・Nでクエストを足す・Escで閉じる</p>
+  <div class="sub-label">キーボード操作（PC）</div><p class="muted" style="font-size:12px">1 いま・2 クエスト・3 記録・←→でボード切り替え・4で受け取り箱・Nでクエストを足す・Escで閉じる</p>
+  <div class="sub-label">列の名前 <small>空にすると聖典の言葉に戻ります</small></div>
+  <form data-form="lanes">${LANES.map(l => `<label class="set-row"><span>${esc(LANE_MARK[l])}</span><input name="ln_${l}" value="${esc((meta('lanes')[l] || {}).name || '')}" placeholder="${esc(laneInfo(l).name)}" autocomplete="off"></label>`).join('')}<div class="row end"><button class="btn sm primary">名前を保存</button></div></form>
   <div class="row" style="justify-content:flex-start"><button class="btn sm" data-act="export">データを書き出す（JSON）</button><button class="btn sm" data-act="restore-pick">書き出したものから戻す</button>${store.mode === 'cloud' ? '<button class="btn sm ghost" data-act="signout">ログアウト</button>' : ''}</div>
-  <p class="muted" style="margin-top:16px;font-size:11px">シルベ v5</p>`);
+  <p class="muted" style="margin-top:16px;font-size:11px">シルベ v7</p>`);
   if ($('#qr')) import('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm').then(m => { const q = (m.default || m)(0, 'M'); q.addData(url); q.make(); $('#qr').innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); }).catch(() => { $('#qr').textContent = url; });
 }
 $('#settingsBtn').onclick = openSettings;
@@ -1494,14 +1997,14 @@ const online = () => { $('#net').hidden = navigator.onLine; };
 addEventListener('online', online); addEventListener('offline', online);
 paintSky(); online();
 let lastDay = dkey();
-setInterval(() => { paintSky(); if (dkey() !== lastDay) { lastDay = dkey(); safeRender(); } else if ((tab === 'act' || tab === 'work') && !sheetOpen) safeRender(); }, 60e3);
+setInterval(() => { paintSky(); if (dkey() !== lastDay) { lastDay = dkey(); safeRender(); } else if (tab === 'ima' && !sheetOpen) safeRender(); }, 60e3);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { paintSky(); safeRender(); } });
 
 let raf, pending = false;
 // 入力中は描き直さない（書きかけが消えないように）。手を離したら反映する
 function safeRender() {
   const a = document.activeElement;
-  if (a && a.closest('#view') && /INPUT|TEXTAREA/.test(a.tagName)) { pending = true; paintHud(); return; }
+  if ((a && a.closest('#view') && /INPUT|TEXTAREA/.test(a.tagName)) || dragging) { pending = true; paintHud(); return; }
   pending = false; render();
 }
 document.addEventListener('focusout', () => setTimeout(() => { if (pending && !document.activeElement?.closest?.('#view input, #view textarea')) safeRender(); }, 60));
