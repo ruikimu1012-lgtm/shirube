@@ -1,5 +1,5 @@
 // シルベ v6 — 行動／戦略／記録／受け取り（＋羅針盤シート・AI相棒・自動の状況カード）
-import { createStore } from './store.js?v=202611250008';
+import { createStore } from './store.js?v=202611251052';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -55,7 +55,7 @@ if (['home', 'today', 'now'].includes(tab)) tab = 'act'; if (tab === 'compass') 
 const BOARDS = [['work', '作業'], ['act', '行動'], ['plan', '戦略'], ['log', '記録'], ['inbox', '受け取り']];
 // 作業ボード（2026-11-24）：?board で開くと、それだけを全画面に（作業用モニターに開きっぱなし）
 const MONITOR = /[?&]board\b/.test(location.search) || location.hash === '#board';
-if (MONITOR) { tab = 'work'; document.body.classList.add('monitor'); }
+if (MONITOR) tab = 'work'; // 全画面の見た目は「作業」を見ている間だけ（render で付け外し。下のバーは薄く残して他のボードへ行けるように・2026-11-25 v6-8）
 if (!BOARDS.some(b => b[0] === tab)) tab = 'act';
 const S = { tasks: [], inbox: [], logs: [], ideas: [], meta: [], habits: [], goals: [], reviews: [] };
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('shirube_prefs') || '{}'); } catch { return {}; } })();
@@ -227,6 +227,7 @@ function md(src = '') {
 /* ================= 画面 ================= */
 const views = { work: viewWork, act: viewAct, plan: viewPlan, inbox: viewInbox, log: viewLog };
 function render() {
+  document.body.classList.toggle('monitor', MONITOR && tab === 'work');
   paintHud(); paintBand();
   document.querySelectorAll('.dock button').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'); });
   const drafts = {};
@@ -298,13 +299,40 @@ function runningBand() {
     ${stop.length ? `<details class="os-more"><summary>止まっている会話 ${stop.length}件</summary><div class="run-list">${stop.map(chip).join('')}</div></details>` : ''}
   </section>`;
 }
+// AIに任せた仕事（2026-11-25）：「AIに任せる」→ meta/workboard.ai[id]。Mac の見張り（_system/scripts/ai-dispatch.js）が
+//   順番待ちに入れ、VS Code の新しいタブで Chief_of_Staff の会話を始める。状態は live/status-dispatch.json
+const DSP_ST = { waiting: ['順番待ち', 'd-wait'], ready: ['もうすぐ始まる', 'd-wait'], work: ['AIが作業中', 'd-work'], ask: ['AIが確認待ち', 'd-ask'], done: ['AIができた', 'd-done'], stale: ['放置で外した', 'd-off'], cancel: ['取り消した', 'd-off'], sent: ['送りました', 'd-wait'] };
+function dispatchOf(id) {
+  const j = (meta('status-dispatch').jobs || []).find(x => x.bid === id);
+  if (j) return j;
+  const a = (meta('workboard').ai || {})[id];
+  return a && !a.cancel && now() - (a.at || 0) < 15 * 60e3 ? { state: 'sent', text: a.text } : null;   // 見張りが受け取るまでの間だけ
+}
+function aiTag(x) {
+  const j = dispatchOf(x.id);
+  if (!j) return `<button class="btn sm wb-ai" data-act="wb-ai" data-id="${esc(x.id)}" title="VS Code で AI が始めます">AIに任せる</button>`;
+  const [l, c] = DSP_ST[j.state] || ['', ''];
+  return `<span class="wb-dsp ${c}">${esc(l)}</span>${['waiting', 'sent'].includes(j.state) ? `<button class="btn sm ghost" data-act="wb-ai-cancel" data-id="${esc(x.id)}">取り消す</button>` : ''}`;
+}
+function dispatchBand() {
+  const d = meta('status-dispatch'), jobs = d.jobs || [];
+  if (!jobs.length) return '';
+  const act = jobs.filter(j => !['done', 'stale', 'cancel'].includes(j.state)), fin = jobs.filter(j => j.state === 'done');
+  const askN = jobs.filter(j => j.state === 'ask').length;
+  const card = j => { const [l, c] = DSP_ST[j.state] || ['', '']; return `<div class="run ${c}"><i></i><div class="run-t"><b>${esc(j.text)}</b><small>${esc(l)}・${esc(j.tool)}・${ago(j.last || j.at, '前')}${j.first ? `<br>${esc(j.first)}` : ''}</small></div></div>`; };
+  return `<section class="card wb-run wb-dspband">
+    <div class="eyebrow">AIに任せた仕事 <small>${act.length}件${askN ? `・<span class="r-hot">確認待ち ${askN}件（VS Code のタブへ）</span>` : ''}${d.waitWhy && jobs.some(j => j.state === 'waiting') ? `・待っている理由：${esc(d.waitWhy)}` : ''}</small></div>
+    <div class="run-list">${act.length ? act.map(card).join('') : '<div class="empty">今はありません</div>'}</div>
+    ${fin.length ? `<details class="os-more"><summary>今日AIができた ${fin.length}件</summary><div class="run-list">${fin.map(card).join('')}</div></details>` : ''}
+  </section>`;
+}
 function viewWork() {
   const os = meta('status-kimuraos'), low = moodState() === 'low', k = dkey(), ai = meta('ai');
   const { all, fin } = workItems(), cur = all[0], rest = all.slice(1);
   const today = rest.filter(x => x.due && x.due <= k), later = rest.filter(x => !x.due || x.due > k);
   const chip = x => `<span class="wb-chip s-${esc(x.src)}">${esc(WB_SRC[x.src] || '')}</span>`;
   const meta1 = x => [chip(x), x.due ? `<span class="${x.due < k ? 'wb-late' : ''}">${esc(wbDue(x.due))}</span>` : '', x.min ? `<span>約${esc(String(x.min).replace(/^約/, ''))}</span>` : ''].filter(Boolean).join('');
-  const row = (x, i) => `<div class="wb-row"><b class="wb-n">${i}</b><div class="wb-t"><div>${esc(x.text)}</div><div class="wb-meta">${meta1(x)}</div></div>
+  const row = (x, i) => `<div class="wb-row"><b class="wb-n">${i}</b><div class="wb-t"><div>${esc(x.text)}</div><div class="wb-meta">${meta1(x)}${aiTag(x)}</div></div>
     <div class="wb-acts"><button class="btn sm" data-act="wb-now" data-id="${esc(x.id)}">今にする</button><button class="wb-check" data-act="wb-done" data-id="${esc(x.id)}" aria-label="終わった">✓</button></div></div>`;
   const aiFresh = ai.text && now() - (ai.updatedAt || 0) < 3 * 3600e3;
   const tr = os.tree;
@@ -317,11 +345,12 @@ function viewWork() {
   return `<div class="wb">
     <div class="wb-top"><div><b class="wb-clock">${clock}</b><span class="muted">${new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' })}</span></div><div class="wb-pills">${info}</div></div>
     ${runningBand()}
+    ${dispatchBand()}
     <div class="wb-grid">
       <section class="card wb-now">
         <div class="eyebrow">今やること</div>
         ${cur ? `<div class="wb-big">${esc(cur.text)}</div><div class="wb-meta">${meta1(cur)}</div>
-          <div class="row"><button class="btn primary wb-go" data-act="wb-done" data-id="${esc(cur.id)}">終わった ✓</button>${rest.length ? `<button class="btn" data-act="wb-skip" data-id="${esc(cur.id)}">あとにする</button>` : ''}</div>`
+          <div class="row"><button class="btn primary wb-go" data-act="wb-done" data-id="${esc(cur.id)}">終わった ✓</button>${rest.length ? `<button class="btn" data-act="wb-skip" data-id="${esc(cur.id)}">あとにする</button>` : ''}${aiTag(cur)}</div>`
           : '<div class="wb-big muted">今やることは、ありません</div><p class="muted">朝7時の作戦会議のあと、ここに並びます。シルベの今日のクエストも出ます。</p>'}
       </section>
       <section class="card wb-col">
@@ -966,6 +995,20 @@ const actions = {
     const r = el.getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2); buzz(15);
     toast(`おわった：${x.text}`, '取り消す', () => { const d2 = { ...(meta('workboard').done || {}) }; delete d2[id]; store.set('meta', 'workboard', { done: d2 }); });
   },
+  'wb-ai'(id) {
+    const x = workItems().all.find(i => i.id === id); if (!x) return;
+    const wb = meta('workboard'), ai = { ...(wb.ai || {}) }, cut = now() - 14 * 864e5;
+    for (const [k, v] of Object.entries(ai)) if ((v.at || 0) < cut) delete ai[k];
+    ai[id] = { text: x.text, at: now(), src: x.src, detail: [x.due ? `期限：${wbDue(x.due)}` : '', x.min ? `目安：${x.min}` : ''].filter(Boolean).join('・') };
+    write(store.set('meta', 'workboard', { ai })); buzz(10);
+    toast('AIに送りました。1分ほどで VS Code に新しいタブが開きます', '取り消す', () => actions['wb-ai-cancel'](id));
+  },
+  'wb-ai-cancel'(id) {
+    const wb = meta('workboard'), ai = { ...(wb.ai || {}) };
+    if (!ai[id]) return;
+    ai[id] = { ...ai[id], cancel: true, cancelAt: now() };
+    write(store.set('meta', 'workboard', { ai })); buzz(8);
+  },
   'wb-now'(id) { write(store.set('meta', 'workboard', { pin: id })); buzz(8); scrollTo({ top: 0, behavior: 'smooth' }); },
   'wb-skip'(id) { const nx = workItems().all.find(i => i.id !== id); write(store.set('meta', 'workboard', { pin: nx ? nx.id : null })); buzz(8); },
   go(_, el) { setTab(el.dataset.v); },
@@ -1199,7 +1242,7 @@ document.addEventListener('submit', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeSheet();
   if (e.target.matches('input,textarea') || e.metaKey || e.ctrlKey) return;
-  const map = { 1: 'act', 2: 'plan', 3: 'log', 4: 'inbox' };
+  const map = { 0: 'work', 1: 'act', 2: 'plan', 3: 'log', 4: 'inbox' };
   if (map[e.key]) setTab(map[e.key]);
   if (e.key === 'ArrowRight' && !sheetOpen) stepBoard(1);
   if (e.key === 'ArrowLeft' && !sheetOpen) stepBoard(-1);
@@ -1419,7 +1462,7 @@ function openSettings() {
   <div class="set-row"><span>効果音</span><button class="chip ${prefs.sound ? 'on' : ''}" data-act="pref-sound">${prefs.sound ? 'オン' : 'オフ'}</button></div>
   <div class="set-row"><span>タイマーの通知</span><button class="chip ${'Notification' in window && Notification.permission === 'granted' ? 'on' : ''}" data-act="notify-on">${'Notification' in window && Notification.permission === 'granted' ? 'オン' : 'オンにする'}</button></div>
   ${store.mode === 'cloud' && device() === 'pc' ? `<div class="sub-label">スマホで開く</div><div class="qr" id="qr"></div><p class="muted" style="font-size:12px">iPhoneのカメラで読み取り → Safariで開く → 共有ボタン →「ホーム画面に追加」</p>` : ''}
-  <div class="sub-label">キーボード操作（PC）</div><p class="muted" style="font-size:12px">1〜4・←→でボード切り替え・Nでクエストを足す・Escで閉じる</p>
+  <div class="sub-label">キーボード操作（PC）</div><p class="muted" style="font-size:12px">0（作業）・1〜4・←→でボード切り替え・Nでクエストを足す・Escで閉じる</p>
   <div class="row" style="justify-content:flex-start"><button class="btn sm" data-act="export">データを書き出す（JSON）</button><button class="btn sm" data-act="restore-pick">書き出したものから戻す</button>${store.mode === 'cloud' ? '<button class="btn sm ghost" data-act="signout">ログアウト</button>' : ''}</div>
   <p class="muted" style="margin-top:16px;font-size:11px">シルベ v5</p>`);
   if ($('#qr')) import('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm').then(m => { const q = (m.default || m)(0, 'M'); q.addData(url); q.make(); $('#qr').innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); }).catch(() => { $('#qr').textContent = url; });

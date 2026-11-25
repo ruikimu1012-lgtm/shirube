@@ -510,9 +510,11 @@ main#view{padding-bottom:calc(150px + env(safe-area-inset-bottom))}
   .wb-now{grid-column:auto;position:sticky;top:16px}
   .wb-col{max-height:calc(100dvh - 120px);overflow:auto}
 }
-body.monitor .hud,body.monitor .dock,body.monitor .dots,body.monitor .fab,body.monitor .band{display:none!important}
+body.monitor .hud,body.monitor .dots,body.monitor .fab,body.monitor .band{display:none!important}
+/* v6-8：全画面でも下のバーは薄く残す（消すと他のボードへ行けなかった） */
+body.monitor .dock{opacity:.35;transition:opacity .2s}body.monitor .dock:hover,body.monitor .dock:focus-within{opacity:1}
+body.monitor main#view{padding-bottom:calc(90px + env(safe-area-inset-bottom))}
 body.monitor .shell{max-width:none;padding:20px 24px}
-body.monitor main#view{padding-bottom:20px}
 
 /* 動いているAIの帯 */
 .wb-run{padding:14px 18px}
@@ -529,3 +531,24 @@ body.monitor main#view{padding-bottom:20px}
 .r-stop{opacity:.6}
 .r-hot{color:#c98a10;font-weight:700}
 @keyframes runp{0%,100%{opacity:1}50%{opacity:.35}}
+/* AIに任せた仕事（2026-11-25） */
+.d-work i{background:#3aa76d;animation:runp 1.6s ease-in-out infinite}
+.d-ask{box-shadow:inset 0 0 0 2px #e0a325;background:rgba(224,163,37,.12)}
+.d-ask i{background:#e0a325}
+.d-wait i{background:#8a94a6}
+.d-done i{background:#3a7bd5}
+.d-off{opacity:.55}
+.wb-dsp{display:inline-flex;align-items:center;font-size:.78rem;font-weight:600;padding:3px 9px;border-radius:999px;background:rgba(127,127,127,.14);white-space:nowrap}
+.wb-dsp.d-work{color:#2e8a59;background:rgba(58,167,109,.14)}
+.wb-dsp.d-ask{color:#b07a0c;background:rgba(224,163,37,.18);box-shadow:none}
+.wb-dsp.d-done{color:#3a7bd5;background:rgba(58,123,213,.14)}
+.wb-ai{white-space:nowrap}
+.wb-acts{flex-wrap:wrap;justify-content:flex-end;gap:6px}
+.wb-now .row .wb-dsp{margin-left:auto}
+/* 行の中の「AIに任せる」は文字の下の行に小さく（細い列でも本文を狭めない） */
+.wb-meta .wb-ai{padding:2px 9px;font-size:.74rem;min-height:0;line-height:1.5;border-radius:999px}
+.wb-meta .wb-dsp{font-size:.72rem;padding:2px 8px}
+.wb-meta .btn.ghost{padding:2px 6px;font-size:.72rem;min-height:0}
+
+/* v6-8（2026-11-25）：ボードが5枚になったので下のバーも5列に（4列のままだと「受け取り」が2段目に落ちて、位置の点がバーの下に隠れていた） */
+.dock{grid-template-columns:repeat(5,1fr)}
