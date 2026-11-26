@@ -1,5 +1,5 @@
 // シルベ v7 — いま／クエスト／記録（＋受け取り箱・羅針盤・AIはシート。v6 までの部品も残してある）
-import { createStore } from './store.js?v=202611251156';
+import { createStore } from './store.js?v=202611261507';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -830,6 +830,7 @@ function viewLog() {
         <label>ひとことメモ<input name="note" value="${esc(t.note || '')}" placeholder="なくてOK" autocomplete="off"></label>
         <div class="row end"><button class="btn primary">残す</button></div></form>
     </section>
+    ${workoutCard()}
     ${weekCard()}
   </div>
   <div class="col">
@@ -1508,7 +1509,9 @@ function habitsStrip() {
   if (!hs.length) return '';
   const slots = Object.keys(SLOTS).filter(s => hs.some(h => h.slot === s)), doneN = hs.filter(h => done[h.id]).length;
   return `<section class="card hstrip"><div class="eyebrow">日課 <small>${doneN} / ${hs.length}</small><button class="eyebrow-act" data-act="habit-edit">編集</button></div>
-    <div class="hs-row no-swipe">${slots.map(s => `<span class="slot-name">${SLOTS[s]}</span>${hs.filter(h => h.slot === s).map(h => `<button class="habit c-${col(h.color)} ${done[h.id] ? 'on' : ''}" data-act="habit" data-id="${h.id}"><i></i>${esc(h.title)}</button>`).join('')}`).join('')}</div></section>`;
+    <div class="hs-row no-swipe">${slots.map(s => `<span class="slot-name">${SLOTS[s]}</span>${hs.filter(h => h.slot === s).map(h => isWorkoutHabit(h)
+      ? `<button class="habit wo-habit c-${col(h.color)} ${done[h.id] || woToday().done ? 'on' : ''}" data-act="workout-open"><i></i>${esc(h.title)}：${WO_KIND[woToday().kind]}${woToday().kind === 'rest' ? '' : 'の日'}</button>`
+      : `<button class="habit c-${col(h.color)} ${done[h.id] ? 'on' : ''}" data-act="habit" data-id="${h.id}"><i></i>${esc(h.title)}</button>`).join('')}`).join('')}</div></section>`;
 }
 
 /* ---- ボード：いま ---- */
@@ -1709,6 +1712,138 @@ function onDrop(ev) {
   }
   saveLayout(L, dev); safeRender();
   toast(`配置を保存しました（${dev === 'phone' ? 'スマホ' : 'PC'}の並び）`, '元に戻す', () => { saveLayout(before, dev); undoMove?.(); safeRender(); });
+}
+
+/* ================= v7-1（2026-11-26）：筋トレ（上・下・休みの3日ワンセット） ================= */
+// 記録は記録の logs[日].workout（PCとスマホで同じ）。設定は meta/workout。体の中身なので ~/仕事 側（橋）へは送らない
+// 進み方（チーフが決めた既定）：記録した日を基準に次へ。やれなかった日はずらさない。休みは「休み」を押すか、その日が過ぎたら次へ
+const WO_KIND = { upper: '上', lower: '下', rest: '休み' };
+const WO_CYCLE = ['upper', 'lower', 'rest'];
+const WO_DEFAULT = {
+  upper: [{ id: 'pushup', name: '腕立て伏せ', w: false }, { id: 'shoulder', name: 'ショルダープレス', w: true }, { id: 'deadlift', name: 'デッドリフト', w: true }],
+  lower: [{ id: 'squat', name: 'スクワット', w: true }, { id: 'lunge', name: 'ランジ', w: true }],
+};
+const woCfg = () => { const m = meta('workout'); return { ex: { upper: m.ex?.upper || WO_DEFAULT.upper, lower: m.ex?.lower || WO_DEFAULT.lower }, next: m.next || 'upper', restDay: m.restDay || '', manual: m.manual || null }; };
+const woNextOf = k => WO_CYCLE[(WO_CYCLE.indexOf(k) + 1) % WO_CYCLE.length];
+const isWorkoutHabit = h => /筋トレ/.test(h.title || '');
+// 今日はどれか
+function woToday() {
+  const k = dkey(), rec = todayLog().workout, c = woCfg();
+  if (rec && rec.kind) return { kind: rec.kind, done: true };
+  if (c.manual && c.manual.day === k) return { kind: c.manual.kind, done: false };
+  if (c.next === 'rest' && c.restDay && k > c.restDay) return { kind: 'upper', done: false };   // 休みの日が過ぎたら次へ
+  return { kind: c.next, done: false };
+}
+// 種目ごとの前回（今日より前）
+function woLast(exId) {
+  const k = dkey();
+  for (const l of S.logs.filter(l => l.id < k && l.workout?.ex?.[exId]?.length).sort((a, b) => b.id.localeCompare(a.id))) return { day: l.id, rows: l.workout.ex[exId] };
+  return null;
+}
+const woFmt = rows => rows.map(r => `${r.reps || 0}回×${r.sets || 1}${r.kg ? `・${r.kg}kg` : ''}`).join(' / ');
+function woRowHtml(exId, i, r, ghost, w) {
+  const f = (name, v, step, unit) => `<div class="wo-f"><span class="wo-u">${unit}</span><div class="wo-num">
+      <button type="button" class="wo-pm" data-act="wo-step" data-v="${-step}" aria-label="へらす">−</button>
+      <input name="${name}" inputmode="decimal" value="${v ?? ''}" class="${ghost ? 'ghost' : ''}" autocomplete="off">
+      <button type="button" class="wo-pm" data-act="wo-step" data-v="${step}" aria-label="ふやす">＋</button></div></div>`;
+  return `<div class="wo-row" data-ex="${esc(exId)}" data-i="${i}">${f('reps', r.reps, 1, '回')}${f('sets', r.sets ?? 1, 1, 'セット')}${w ? f('kg', r.kg, 2.5, 'kg') : ''}
+    ${i ? `<button type="button" class="wo-del" data-act="wo-row-del" aria-label="この行を消す">×</button>` : ''}</div>`;
+}
+function workoutSheet(kindArg) {
+  const t = woToday(), kind = kindArg || t.kind, c = woCfg(), rec = todayLog().workout;
+  const pick = `<div class="sub-label">今日は <small>ずれた時は選び直せます</small></div>${chipGroup('wokind', WO_CYCLE.map(k => [k, WO_KIND[k] + (k === 'rest' ? '' : 'の日')]), kind)}`;
+  if (kind === 'rest') return `<h3>筋トレ：休みの日</h3>${pick}
+    <p class="muted" style="margin-top:10px">休むのも筋トレのうち。押さなくても、日付が変わると「上の日」に進みます</p>
+    <div class="row end"><button class="btn primary" data-act="wo-rest">休んだ</button></div>`;
+  const exs = c.ex[kind] || [];
+  const body = exs.map(e => {
+    const today = rec && rec.kind === kind && rec.ex?.[e.id], last = woLast(e.id);
+    const rows = today || (last ? last.rows : [{ reps: '', sets: 3, kg: '' }]);
+    return `<div class="wo-ex" data-ex="${esc(e.id)}"><div class="wo-h"><b>${esc(e.name)}</b><small class="muted">${last ? `前回 ${esc(last.day.slice(5).replace('-', '/'))}：${esc(woFmt(last.rows))}` : 'はじめて'}</small></div>
+      <div class="wo-rows">${rows.map((r, i) => woRowHtml(e.id, i, r, !today, e.w)).join('')}</div>
+      <button type="button" class="btn sm ghost wo-add" data-act="wo-row-add" data-id="${esc(e.id)}" data-w="${e.w ? 1 : ''}">＋ セットを足す（回数・重さが違う時）</button></div>`;
+  }).join('') || '<div class="empty">種目がありません。下の「種目を直す」から足せます</div>';
+  return `<h3>筋トレ：${WO_KIND[kind]}の日</h3>${pick}
+    <form data-form="workout" data-kind="${kind}">${body}
+      <p class="muted" style="font-size:12px">薄い数字は前回の記録です。同じなら、そのまま「記録する」だけでOK</p>
+      <div class="row end"><button type="button" class="btn ghost" data-act="wo-edit">種目を直す</button><button class="btn primary">記録する</button></div></form>`;
+}
+function workoutEditSheet() {
+  const c = woCfg();
+  const part = k => `<div class="sub-label">${WO_KIND[k]}の日</div>${c.ex[k].map((e, i) => `<div class="wo-edit-row"><span>${esc(e.name)}${e.w ? '' : ' <small class="muted">（重さなし）</small>'}</span>
+      <button class="btn sm ghost" data-act="wo-ex-move" data-id="${k}:${i}:-1" ${i ? '' : 'disabled'} aria-label="上へ">↑</button><button class="btn sm ghost" data-act="wo-ex-move" data-id="${k}:${i}:1" ${i < c.ex[k].length - 1 ? '' : 'disabled'} aria-label="下へ">↓</button><button class="btn sm ghost" data-act="wo-ex-del" data-id="${k}:${i}" aria-label="消す">消す</button></div>`).join('')}
+    <form data-form="woex" data-kind="${k}" class="field"><input name="t" placeholder="種目を足す" autocomplete="off"><label class="switch"><input type="checkbox" name="w" checked><span>重さあり</span></label><button class="btn sm">足す</button></form>`;
+  return `<h3>筋トレの種目</h3>${part('upper')}${part('lower')}<p class="muted" style="font-size:12px;margin-top:10px">消しても、今までの記録は残ります</p>`;
+}
+const saveWoCfg = patch => write(store.set('meta', 'workout', patch));
+function woMarkHabit(on) { const h = activeHabits().find(isWorkoutHabit); if (h) { const cur = todayLog().habits || {}; setLog({ habits: { ...cur, [h.id]: on } }); } }
+Object.assign(actions, {
+  'workout-open'() { openSheet(workoutSheet()); },
+  'wo-step'(_, el) {
+    const inp = el.parentElement.querySelector('input'), step = +el.dataset.v;
+    const v = Math.max(0, Math.round(((parseFloat(inp.value || inp.placeholder) || 0) + step) * 10) / 10);
+    inp.value = String(v); inp.classList.remove('ghost'); buzz(5);
+  },
+  'wo-row-add'(id, el) {
+    const box = el.closest('.wo-ex').querySelector('.wo-rows'), rows = box.querySelectorAll('.wo-row'), last = rows[rows.length - 1];
+    const val = n => last?.querySelector(`[name=${n}]`)?.value || '';
+    box.insertAdjacentHTML('beforeend', woRowHtml(id, rows.length, { reps: val('reps'), sets: 1, kg: val('kg') }, false, !!el.dataset.w));
+    buzz(5);
+  },
+  'wo-row-del'(_, el) { el.closest('.wo-row').remove(); },
+  'wo-rest'() {
+    setLog({ workout: { kind: 'rest', at: now() } }); saveWoCfg({ next: 'upper', restDay: '', manual: null }); woMarkHabit(true);
+    closeSheet(); toast('休みの日にしました。次は「上の日」です');
+  },
+  'wo-edit'() { openSheet(workoutEditSheet()); },
+  'wo-ex-del'(id) { const [k, i] = id.split(':'), c = woCfg(), list = c.ex[k].filter((_, j) => j !== +i); saveWoCfg({ ex: { ...c.ex, [k]: list } }); setTimeout(() => openSheet(workoutEditSheet()), 60); },
+  'wo-ex-move'(id) { const [k, i, d] = id.split(':').map((x, j) => j ? +x : x), c = woCfg(), list = c.ex[k].slice(), j = i + d; if (j < 0 || j >= list.length) return; [list[i], list[j]] = [list[j], list[i]]; saveWoCfg({ ex: { ...c.ex, [k]: list } }); setTimeout(() => openSheet(workoutEditSheet()), 60); },
+});
+// 「今日は上／下／休み」の選び直し：シートの中のチップ（data-group=wokind）を押したら、その日の種目で開き直す
+document.addEventListener('click', e => {
+  const chip = e.target.closest('#sheet [data-group=wokind] .chip'); if (!chip) return;
+  const k = chip.dataset.v;
+  saveWoCfg({ manual: { day: dkey(), kind: k } });
+  setTimeout(() => openSheet(workoutSheet(k)), 30);
+});
+document.addEventListener('input', e => { if (e.target.closest?.('#sheet .wo-num')) e.target.classList.remove('ghost'); });
+Object.assign(forms, {
+  workout(f) {
+    const kind = f.dataset.kind, ex = {};
+    f.querySelectorAll('.wo-ex').forEach(box => {
+      const rows = [...box.querySelectorAll('.wo-row')].map(r => {
+        const g = n => { const i = r.querySelector(`[name=${n}]`); return i ? parseFloat(i.value) : NaN; };
+        return { reps: g('reps') || 0, sets: g('sets') || 1, kg: g('kg') || 0 };
+      }).filter(r => r.reps > 0);
+      if (rows.length) ex[box.dataset.ex] = rows;
+    });
+    if (!Object.keys(ex).length) return toast('回数を入れてください');
+    setLog({ workout: { kind, ex, at: now() } });
+    const nx = woNextOf(kind);
+    saveWoCfg({ next: nx, restDay: nx === 'rest' ? dkey(addDays(1)) : '', manual: null });
+    woMarkHabit(true);
+    closeSheet(); burst(innerWidth / 2, innerHeight / 3, 16); if (prefs.sound) chime([659, 988]);
+    toast(`筋トレ（${WO_KIND[kind]}の日）を記録しました。次は「${WO_KIND[nx]}${nx === 'rest' ? '' : 'の日'}」`);
+  },
+  woex(f) {
+    const t = f.t.value.trim(); if (!t) return; const k = f.dataset.kind, c = woCfg();
+    const list = [...c.ex[k], { id: 'x' + Date.now().toString(36), name: t, w: !!f.w.checked }];
+    saveWoCfg({ ex: { ...c.ex, [k]: list } }); setTimeout(() => openSheet(workoutEditSheet()), 60);
+  },
+});
+// 記録のボード：種目ごとの推移（連続日数・やらなかった日は出さない）
+function workoutCard() {
+  const logs = S.logs.filter(l => l.workout?.ex).sort((a, b) => b.id.localeCompare(a.id));
+  const c = woCfg(), all = [...c.ex.upper, ...c.ex.lower];
+  const ids = [...new Set([...all.map(e => e.id), ...logs.flatMap(l => Object.keys(l.workout.ex))])];
+  const nameOf = id => (all.find(e => e.id === id) || {}).name || id;
+  const t = woToday();
+  return `<section class="card">
+    <div class="eyebrow">筋トレの記録 <small>今日：${WO_KIND[t.kind]}${t.kind === 'rest' ? '' : 'の日'}${t.done ? '・記録済み' : ''}</small><button class="eyebrow-act" data-act="workout-open">記録する</button></div>
+    ${logs.length ? ids.filter(id => logs.some(l => l.workout.ex[id])).map(id => `<details class="wo-hist"><summary><b>${esc(nameOf(id))}</b><span class="muted">${esc(woFmt(logs.find(l => l.workout.ex[id]).workout.ex[id]))}</span></summary>
+      <table class="wo-tbl"><tr><th>日付</th><th>回数×セット</th><th>重さ</th></tr>${logs.filter(l => l.workout.ex[id]).slice(0, 12).map(l => l.workout.ex[id].map((r, i) => `<tr><td>${i ? '' : esc(l.id.slice(5).replace('-', '/'))}</td><td>${r.reps}回×${r.sets}</td><td>${r.kg ? r.kg + 'kg' : '—'}</td></tr>`).join('')).join('')}</table></details>`).join('')
+      : '<div class="empty">いまのボードの日課「筋トレ」を押すと、ここに種目ごとの推移がたまります</div>'}
+  </section>`;
 }
 
 document.addEventListener('click', e => {

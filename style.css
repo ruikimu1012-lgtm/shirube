@@ -651,3 +651,24 @@ a.btn{display:inline-flex;align-items:center;text-decoration:none}
 .pc-only{font-size:12px}
 .set-row input{flex:1;min-width:0;margin-left:10px;padding:6px 10px;border-radius:10px;border:1px solid var(--hair);background:var(--card2)}
 body.monitor .ima-misc{display:none}
+
+/* ===== v7-1（2026-11-26）筋トレ：片手で入れやすい大きさ ===== */
+.wo-habit{font-weight:700}
+.wo-ex{padding:12px 0;border-top:1px solid var(--hair)}.wo-ex:first-of-type{border-top:0}
+.wo-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;margin-bottom:6px}.wo-h b{font-size:17px}.wo-h small{font-size:12px}
+.wo-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:6px}
+.wo-f{display:flex;flex-direction:column;gap:2px;flex:1 1 140px;min-width:0}
+.wo-u{font-size:11px;color:var(--sub)}
+.wo-num{display:flex;align-items:center;gap:4px}
+.wo-num input{flex:1;min-width:0;width:100%;height:48px;text-align:center;font-size:22px;font-variant-numeric:tabular-nums;border-radius:12px;border:1px solid var(--hair);background:var(--card2)}
+.wo-num input.ghost{color:var(--dim)}
+.wo-pm{flex:none;width:48px;height:48px;border-radius:12px;background:var(--card2);box-shadow:inset 0 0 0 1px var(--hair);font-size:22px;font-weight:700}
+.wo-pm:active{transform:scale(.94)}
+.wo-del{width:40px;height:48px;color:var(--dim);font-size:18px}
+.wo-add{margin-top:8px}
+.wo-edit-row{display:flex;align-items:center;gap:6px;padding:6px 0;border-top:1px solid var(--hair)}.wo-edit-row span{flex:1;min-width:0}
+.wo-hist{padding:8px 0;border-top:1px solid var(--hair)}.wo-hist:first-of-type{border-top:0}
+.wo-hist summary{display:flex;justify-content:space-between;gap:10px;cursor:pointer;min-height:36px;align-items:center}
+.wo-hist summary span{font-size:12px;text-align:right}
+.wo-tbl{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;font-variant-numeric:tabular-nums}
+.wo-tbl th{font-size:11px;color:var(--sub);text-align:left;font-weight:500}.wo-tbl td,.wo-tbl th{padding:4px 6px;border-top:1px solid var(--hair)}
