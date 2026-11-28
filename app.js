@@ -1,5 +1,5 @@
 // シルベ v7 — いま／クエスト／記録（＋受け取り箱・羅針盤・AIはシート。v6 までの部品も残してある）
-import { createStore } from './store.js?v=202611261507';
+import { createStore } from './store.js?v=202611290044';
 
 /* ================= 基本 ================= */
 const $ = s => document.querySelector(s);
@@ -49,12 +49,11 @@ const SEED_GOALS = [
 
 let store, tab = 'ima';
 try { tab = localStorage.getItem('shirube_tab') || 'ima'; } catch {}
-// v7（2026-11-25）：ボードは「いま・クエスト・記録」の3枚。前の名前で覚えていても開けるように
+// 以前のタブ名を、現在のタブ名に読み替える。
 const OLD_TAB = { home: 'ima', today: 'ima', now: 'ima', act: 'ima', work: 'ima', inbox: 'ima', plan: 'quest', compass: 'quest' };
 if (OLD_TAB[tab]) tab = OLD_TAB[tab];
-// 4枚のボード（左右にスワイプ／下のバー／←→キー／1〜4キー）。前に見ていたボードを覚える
-// 見る場面で分ける：行動＝作業中に開きっぱなし／戦略＝優先順位と全体／記録＝見返す／受け取り＝候補の仕分け
-const BOARDS = [['ima', 'いま'], ['quest', 'クエスト'], ['log', '記録']];
+// 下のバー、スワイプ、矢印キーで4枚のボードを切り替える。
+const BOARDS = [['ima', 'いま'], ['quest', 'クエスト'], ['log', '記録'], ['kakunin', '確認']];
 // 作業ボード（2026-11-24）：?board で開くと、それだけを全画面に（作業用モニターに開きっぱなし）
 const MONITOR = /[?&]board\b/.test(location.search) || location.hash === '#board';
 if (MONITOR) tab = 'ima'; // 全画面の見た目は「作業」を見ている間だけ（render で付け外し。下のバーは薄く残して他のボードへ行けるように・2026-11-25 v6-8）
@@ -228,18 +227,19 @@ function md(src = '') {
 }
 
 /* ================= 画面 ================= */
-const views = { ima: viewIma, quest: viewQuest, log: viewLog };
+const views = { ima: viewIma, quest: viewQuest, log: viewLog, kakunin: viewKakunin };
+const disclosureKey = summary => summary.parentElement.dataset.kcRow || summary.textContent;
 function render() {
   document.body.classList.toggle('monitor', MONITOR && tab === 'ima');
   paintHud(); paintBand();
   document.querySelectorAll('.dock button').forEach(b => { b.classList.toggle('on', b.dataset.tab === tab); b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'); });
   const drafts = {};
   document.querySelectorAll('#view [data-form] input[name], #view [data-form] textarea[name]').forEach(e => { if (e.type !== 'checkbox' && e.value && e.dataset.typed) drafts[e.closest('[data-form]').dataset.form + '|' + e.name] = e.value; });
-  const openD = [...document.querySelectorAll('#view details[open] summary')].map(x => x.textContent);
+  const openD = [...document.querySelectorAll('#view details[open] summary')].map(disclosureKey);
   const kx = $('#view .kanban')?.scrollLeft || 0;
   $('#view').innerHTML = views[tab]();
   for (const [k, v] of Object.entries(drafts)) { const [f, n] = k.split('|'); const e = $(`#view [data-form="${f}"] [name="${n}"]`); if (e) { e.value = v; e.dataset.typed = '1'; } }
-  document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(x.textContent)) x.parentElement.open = true; });
+  document.querySelectorAll('#view details summary').forEach(x => { if (openD.includes(disclosureKey(x))) x.parentElement.open = true; });
   const kb = $('#view .kanban'); if (kb && kx) kb.scrollLeft = kx;
   $('#fab').hidden = MONITOR || !['ima', 'quest'].includes(tab);
   const i = BOARDS.findIndex(b => b[0] === tab);
@@ -1461,6 +1461,42 @@ function markCardDone(id, el) {
   for (const [k, v] of Object.entries(done)) if (v < cut) delete done[k];
   done[id] = now(); write(store.set('meta', 'workboard', { done }));
   if (el) { const r = el.getBoundingClientRect(); burst(r.left + r.width / 2, r.top + r.height / 2); } buzz(15);
+}
+
+/* ---- 確認 ---- */
+function viewKakunin() {
+  const data = meta('status-kakunin');
+  const hasData = data.schema === 3;
+  const source = { atop: 'a-TOPの夜', today: '朝のブリーフ', night: '仕事の夜' };
+  const list = key => hasData && Array.isArray(data[key]) ? data[key].filter(Boolean) : [];
+  const lines = text => esc(text).replace(/\r?\n/g, '<br>');
+  const row = (key, title, one, details) => `<details class="kc-item" data-kc-row="${esc(key)}">
+    <summary><span><b>${lines(title)}</b><small>${esc(one)}</small></span></summary>
+    <ul class="kc-detail">${details.filter(Boolean).map(line => `<li>${lines(line)}</li>`).join('')}</ul>
+  </details>`;
+  const section = (title, rows) => `<section class="card kc-section"><h2>${title}</h2>
+    ${rows.length ? rows.join('') : `<p class="muted">${hasData ? '該当する項目はありません' : '取り込み待ち'}</p>`}
+  </section>`;
+  return `<div class="kc-board">
+    <p class="kc-note muted">承認ウィンドウ（7:30・20:00）か、この会話で返事してください</p>
+    ${section('今やること', list('todo').map((item, i) =>
+      row('kc:todo:' + i, item.text, item.about || source[item.src] || item.area, [
+        '区分 ' + (item.area || '未設定'),
+        item.due ? '期限 ' + item.due : '期限の記載なし',
+        Number.isInteger(item.minutes) ? '目安 ' + item.minutes + '分' : '所要時間の記載なし',
+      ])))}
+    ${section('決めること', list('decide').map((item, i) => item.kind === 'job'
+      ? row('kc:job:' + i, item.title || 'AIの確認 ' + (item.number || i + 1),
+        item.about || '木村さんの返事を待っている会話', [
+        item.first, item.question ? '確認待ち ' + item.question : '', 'Yes で続ける',
+      ])
+      : row('kc:decide:' + item.id, item.title || item.id,
+        item.about || item.one, [item.detail || item.one])))}
+    ${section('AIがやったこと', list('done').map((item, i) =>
+      row('kc:done:' + i, item.text, item.about || '作業記録', ['記録日時 ' + item.when])))}
+    ${section('調べ中', list('working').map((item, i) =>
+      row('kc:work:' + i, item.text, item.about || '進めている会話', ['取り込み時点で作業中です。'])))}
+  </div>`;
 }
 
 /* ---- いま気にする物（全モードで出す）：AIの確認待ち・判断待ち ---- */
